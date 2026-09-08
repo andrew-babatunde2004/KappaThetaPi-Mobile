@@ -6,6 +6,10 @@ struct Announcement: Identifiable, Equatable, Decodable {
     let body: String
     let createdAt: Date
     let updatedAt: Date?
+    let authorName: String?
+    let authorExecutiveTitle: String?
+    let links: [AnnouncementLink]
+    let media: [AnnouncementMedia]
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -15,6 +19,10 @@ struct Announcement: Identifiable, Equatable, Decodable {
         case content
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case authorName = "author_name"
+        case authorExecutiveTitle = "author_exec_title"
+        case links
+        case media
     }
 
     init(from decoder: Decoder) throws {
@@ -36,6 +44,10 @@ struct Announcement: Identifiable, Equatable, Decodable {
             ?? ""
         createdAt = try container.announcementDate(for: .createdAt) ?? .distantPast
         updatedAt = try container.announcementDate(for: .updatedAt)
+        authorName = try container.decodeIfPresent(String.self, forKey: .authorName)
+        authorExecutiveTitle = try container.decodeIfPresent(String.self, forKey: .authorExecutiveTitle)
+        links = try container.decodeIfPresent([AnnouncementLink].self, forKey: .links) ?? []
+        media = try container.decodeIfPresent([AnnouncementMedia].self, forKey: .media) ?? []
     }
 
     static func decodeAnnouncements(from data: Data) throws -> [Announcement] {
@@ -58,6 +70,44 @@ struct Announcement: Identifiable, Equatable, Decodable {
         }
 
         throw KTPAPIError.decodeFailed("The response did not contain a supported announcement list.")
+    }
+}
+
+struct AnnouncementLink: Identifiable, Equatable, Decodable {
+    let label: String
+    let url: URL
+
+    var id: String { "\(label)-\(url.absoluteString)" }
+}
+
+struct AnnouncementMedia: Identifiable, Equatable, Decodable {
+    let id: String
+    let kind: String
+    let filename: String?
+    let mimeType: String?
+
+    var isVideo: Bool {
+        kind.caseInsensitiveCompare("video") == .orderedSame
+            || mimeType?.lowercased().hasPrefix("video/") == true
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case filename
+        case mimeType = "mime_type"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let stringID = try? container.decode(String.self, forKey: .id) {
+            id = stringID
+        } else {
+            id = String(try container.decode(Int.self, forKey: .id))
+        }
+        kind = try container.decodeIfPresent(String.self, forKey: .kind) ?? "image"
+        filename = try container.decodeIfPresent(String.self, forKey: .filename)
+        mimeType = try container.decodeIfPresent(String.self, forKey: .mimeType)
     }
 }
 

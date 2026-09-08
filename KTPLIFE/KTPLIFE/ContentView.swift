@@ -285,6 +285,10 @@ struct ContentView: View {
                 showMeetings: { presentedFullScreen = .meetings },
                 showInterviews: { presentedFullScreen = .interviews },
                 openQRScanner: { presentedSheet = .qrScanner },
+                openEvent: { eventID in
+                    pushEventID = eventID
+                    selectedTab = .calendar
+                },
                 activeGroup: authManager.currentUserGroup
             )
         case .community:

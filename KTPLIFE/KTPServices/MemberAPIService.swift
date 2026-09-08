@@ -207,6 +207,42 @@ final class KTPAPIService {
         return try UnreadCountResponse.decode(from: data)
     }
 
+    /// Fetches server-backed direct and group-chat mute choices.
+    func fetchMessageMutePreferences() async throws -> MessageMutePreferences {
+        let data = try await fetchProtectedData(
+            from: baseURL.appendingPathComponent("messages/mutes"),
+            logLabel: "message mute preferences"
+        )
+        return try JSONDecoder().decode(MessageMutePreferences.self, from: data)
+    }
+
+    /// Mutes or unmutes notifications from one direct-message member.
+    func setDirectMessageMuted(_ muted: Bool, userID: String) async throws -> Bool {
+        let url = baseURL
+            .appendingPathComponent("messages/conversations")
+            .appendingPathComponent(userID)
+            .appendingPathComponent("mute")
+        return try await updateMessageMute(muted, at: url, logLabel: "direct message mute")
+    }
+
+    /// Mutes or unmutes notifications from one group chat.
+    func setGroupChatMuted(_ muted: Bool, chatID: String) async throws -> Bool {
+        let url = baseURL
+            .appendingPathComponent("group-chats")
+            .appendingPathComponent(chatID)
+            .appendingPathComponent("mute")
+        return try await updateMessageMute(muted, at: url, logLabel: "group chat mute")
+    }
+
+    private func updateMessageMute(_ muted: Bool, at url: URL, logLabel: String) async throws -> Bool {
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(MessageMuteUpdateRequest(muted: muted))
+        let data = try await fetchProtectedData(for: request, logLabel: logLabel)
+        return try JSONDecoder().decode(MessageMuteUpdateResponse.self, from: data).muted
+    }
+
     /// Fetches a group chat's member-only profile image.
     func fetchGroupChatPhotoData(chatID: String) async throws -> Data {
         let url = baseURL
@@ -518,10 +554,14 @@ final class KTPAPIService {
         }
     }
 
-    /// Fetches announcements visible to the authenticated member.
-    func fetchAnnouncements() async throws -> [Announcement] {
-        let url = baseURL.appendingPathComponent("announcements")
-        let data = try await fetchProtectedData(from: url, logLabel: "announcements")
+    /// Fetches the announcement board that matches the authenticated account.
+    /// Rush announcements live in their own API table and endpoint, matching
+    /// the separate feed displayed by the website.
+    func fetchAnnouncements(for group: MemberGroup?) async throws -> [Announcement] {
+        let isRush = group == .rush
+        let endpoint = isRush ? "rush-announcements" : "announcements"
+        let url = baseURL.appendingPathComponent(endpoint)
+        let data = try await fetchProtectedData(from: url, logLabel: endpoint)
 
         do {
             return try Announcement.decodeAnnouncements(from: data)
@@ -530,6 +570,20 @@ final class KTPAPIService {
             AuthDebugLog.log("Announcements decode failed: \(error.localizedDescription). Body=\(responseBody)")
             throw KTPAPIError.decodeFailed(error.localizedDescription)
         }
+    }
+
+    /// Fetches a protected announcement thumbnail from the matching board.
+    func fetchAnnouncementMediaThumbnail(
+        mediaID: String,
+        isRushAnnouncement: Bool
+    ) async throws -> Data {
+        let endpoint = isRushAnnouncement ? "rush-announcements" : "announcements"
+        let url = baseURL
+            .appendingPathComponent(endpoint)
+            .appendingPathComponent("media")
+            .appendingPathComponent(mediaID)
+            .appending(queryItems: [URLQueryItem(name: "size", value: "thumbnail")])
+        return try await fetchProtectedData(from: url, logLabel: "\(endpoint) media \(mediaID)")
     }
 
     /// Fetches meetings organized by or inviting the authenticated member.
@@ -946,6 +1000,14 @@ private struct SendMessageRequest: Encodable {
         case recipientId = "recipient_id"
         case body
     }
+}
+
+private struct MessageMuteUpdateRequest: Encodable {
+    let muted: Bool
+}
+
+private struct MessageMuteUpdateResponse: Decodable {
+    let muted: Bool
 }
 
 private struct SentMessageResponse: Decodable {

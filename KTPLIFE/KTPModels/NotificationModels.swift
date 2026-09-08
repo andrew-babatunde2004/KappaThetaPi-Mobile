@@ -76,34 +76,81 @@ struct NotificationDeviceRegistration: Encodable {
     let environment: String
 }
 
-/// Stores each member's per-group mute choices on this device. A server-side
-/// preference route is still required to suppress remote APNs while the app is
-/// not running; this preserves the user's selection until that route is added.
-enum GroupChatMutePreferences {
-    private static let storageKey = "mutedGroupChatIDs"
+struct MessageMutePreferences: Codable, Equatable {
+    var directUserIDs: [String]
+    var groupChatIDs: [String]
 
+    enum CodingKeys: String, CodingKey {
+        case directUserIDs = "direct_user_ids"
+        case groupChatIDs = "group_chat_ids"
+    }
+
+    static var cached: MessageMutePreferences {
+        guard let data = UserDefaults.standard.data(forKey: storageKey),
+              let preferences = try? JSONDecoder().decode(MessageMutePreferences.self, from: data)
+        else {
+            return MessageMutePreferences(directUserIDs: [], groupChatIDs: [])
+        }
+        return preferences
+    }
+
+    func cacheLocally() {
+        guard let data = try? JSONEncoder().encode(self) else { return }
+        UserDefaults.standard.set(data, forKey: Self.storageKey)
+        NotificationCenter.default.post(name: .messageMutePreferencesDidChange, object: nil)
+    }
+
+    private static let storageKey = "messageMutePreferences"
+}
+
+enum DirectMessageMutePreferences {
+    static func isMuted(_ userID: String) -> Bool {
+        MessageMutePreferences.cached.directUserIDs.contains(userID)
+    }
+
+    static func setMuted(_ isMuted: Bool, for userID: String) {
+        var preferences = MessageMutePreferences.cached
+        var ids = Set(preferences.directUserIDs)
+        if isMuted {
+            ids.insert(userID)
+        } else {
+            ids.remove(userID)
+        }
+        preferences.directUserIDs = Array(ids).sorted()
+        preferences.cacheLocally()
+    }
+
+    static var mutedUserIDs: Set<String> {
+        Set(MessageMutePreferences.cached.directUserIDs)
+    }
+}
+
+/// Keeps a local copy for an immediate inbox update and offline display. The
+/// API remains the source of truth and suppresses remote notifications.
+enum GroupChatMutePreferences {
     static func isMuted(_ chatID: String) -> Bool {
-        mutedChatIDs.contains(chatID)
+        MessageMutePreferences.cached.groupChatIDs.contains(chatID)
     }
 
     static func setMuted(_ isMuted: Bool, for chatID: String) {
-        var ids = mutedChatIDs
+        var preferences = MessageMutePreferences.cached
+        var ids = Set(preferences.groupChatIDs)
         if isMuted {
             ids.insert(chatID)
         } else {
             ids.remove(chatID)
         }
-        UserDefaults.standard.set(Array(ids), forKey: storageKey)
-        NotificationCenter.default.post(name: .groupChatMutePreferencesDidChange, object: nil)
+        preferences.groupChatIDs = Array(ids).sorted()
+        preferences.cacheLocally()
     }
 
     static var mutedChatIDs: Set<String> {
-        Set(UserDefaults.standard.stringArray(forKey: storageKey) ?? [])
+        Set(MessageMutePreferences.cached.groupChatIDs)
     }
 }
 
 extension Notification.Name {
-    static let groupChatMutePreferencesDidChange = Notification.Name("groupChatMutePreferencesDidChange")
+    static let messageMutePreferencesDidChange = Notification.Name("messageMutePreferencesDidChange")
 }
 
 enum PushNotificationDestination: Equatable {

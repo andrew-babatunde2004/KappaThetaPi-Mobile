@@ -23,6 +23,25 @@ enum AppAppearance: String, CaseIterable, Identifiable {
         }
     }
 
+    var subtitle: String {
+        switch self {
+        case .system:
+            "Automatically matches your iPhone setting"
+        case .light:
+            "Uses bright backgrounds and dark text"
+        case .dark:
+            "Uses darker surfaces in low-light environments"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .system: "circle.lefthalf.filled"
+        case .light: "sun.max.fill"
+        case .dark: "moon.stars.fill"
+        }
+    }
+
     var preferredColorScheme: ColorScheme? {
         switch self {
         case .system: nil

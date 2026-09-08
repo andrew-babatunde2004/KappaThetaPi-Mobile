@@ -22,6 +22,7 @@ struct HomeView: View {
     let showMeetings: () -> Void
     let showInterviews: () -> Void
     let openQRScanner: () -> Void
+    let openEvent: (String) -> Void
     let activeGroup: MemberGroup?
 
     private var canAccessFilesAndPhotos: Bool {
@@ -146,7 +147,9 @@ struct HomeView: View {
                     )
                 } else {
                     ForEach(Array(visibleWeekEvents.enumerated()), id: \.element.id) { index, event in
-                        HomeEventRow(event: event)
+                        HomeEventRow(event: event) {
+                            openEvent(event.id)
+                        }
 
                         if index < visibleWeekEvents.count - 1 {
                             Divider()
@@ -681,45 +684,56 @@ private struct HomeNavigationItem: View {
 
 private struct HomeEventRow: View {
     let event: CalendarEvent
+    let action: () -> Void
 
     var body: some View {
-        HStack(alignment: .center, spacing: 16) {
-            VStack(spacing: 2) {
-                Text(event.startDate.formatted(.dateTime.weekday(.abbreviated)))
-                    .font(AppFont.caption(weight: .semibold))
-                    .textCase(.uppercase)
+        Button(action: action) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(spacing: 2) {
+                    Text(event.startDate.formatted(.dateTime.weekday(.abbreviated)))
+                        .font(AppFont.caption(weight: .semibold))
+                        .textCase(.uppercase)
 
-                Text(event.startDate.formatted(.dateTime.day()))
-                    .font(AppFont.title(20))
-            }
-            .foregroundStyle(HomeDesign.accent)
-            .frame(width: 56, height: 58)
-            .background(
-                HomeDesign.accent.opacity(0.10),
-                in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-            )
-
-            VStack(alignment: .leading, spacing: 7) {
-                Text(event.title)
-                    .font(AppFont.headline())
-                    .foregroundStyle(HomeDesign.primaryText)
-                    .lineLimit(2)
-
-                HStack(spacing: 5) {
-                    Image(systemName: "clock")
-                        .font(.system(size: 10, weight: .semibold))
-
-                    Text(eventTimeLabel)
-                        .font(AppFont.footnote())
+                    Text(event.startDate.formatted(.dateTime.day()))
+                        .font(AppFont.title(20))
                 }
-                .foregroundStyle(HomeDesign.secondaryText)
-            }
+                .foregroundStyle(HomeDesign.accent)
+                .frame(width: 56, height: 58)
+                .background(
+                    HomeDesign.accent.opacity(0.10),
+                    in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+                )
 
-            Spacer(minLength: 0)
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(event.title)
+                        .font(AppFont.headline())
+                        .foregroundStyle(HomeDesign.primaryText)
+                        .lineLimit(2)
+
+                    HStack(spacing: 5) {
+                        Image(systemName: "clock")
+                            .font(.system(size: 10, weight: .semibold))
+
+                        Text(eventTimeLabel)
+                            .font(AppFont.footnote())
+                    }
+                    .foregroundStyle(HomeDesign.secondaryText)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(HomeDesign.secondaryText)
+            }
+            .padding(.vertical, 13)
+            .frame(maxWidth: .infinity, minHeight: 84, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 13)
-        .frame(maxWidth: .infinity, minHeight: 84, alignment: .leading)
+        .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
+        .accessibilityLabel("Open \(event.title) in Calendar")
+        .accessibilityHint("Switches to the Calendar tab and opens the event details")
     }
 
     private var eventTimeLabel: String {
@@ -815,6 +829,7 @@ private enum HomeHeroConfiguration {
         showMeetings: {},
         showInterviews: {},
         openQRScanner: {},
+        openEvent: { _ in },
         activeGroup: nil
     )
         .padding(.horizontal, 24)
@@ -833,6 +848,7 @@ private enum HomeHeroConfiguration {
         showMeetings: {},
         showInterviews: {},
         openQRScanner: {},
+        openEvent: { _ in },
         activeGroup: nil
     )
         .padding(.horizontal, 24)

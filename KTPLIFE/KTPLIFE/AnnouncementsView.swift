@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct AnnouncementsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -6,6 +7,10 @@ struct AnnouncementsView: View {
     @State private var announcements: [Announcement] = []
     @State private var isLoading = false
     @State private var loadError: String?
+
+    private var isRushFeed: Bool {
+        authManager.currentUserGroup == .rush
+    }
 
     // im not gonna lie im KINDA confused here
     // we create the variable apiService that uses the class?
@@ -24,8 +29,8 @@ struct AnnouncementsView: View {
                 LazyVStack(alignment: .leading, spacing: 0) {
                     // the header of the app 
                     AppSectionHeading(
-                        eyebrow: "Chapter news",
-                        title: "Announcements",
+                        eyebrow: isRushFeed ? "Rush news" : "Chapter news",
+                        title: isRushFeed ? "Rush Announcements" : "Announcements",
                         systemImage: "megaphone.fill"
                     )
                     .padding(.bottom, 22)
@@ -40,10 +45,15 @@ struct AnnouncementsView: View {
                         // for each announcement the app grabs "ordered from 1 being least recent and X being most recent"
                         ForEach(Array(announcements.enumerated()), id: \.element.id) { index, announcement in
                             AnnouncementThreadPost(
-                                // this posts the announcment within the app
                                 announcement: announcement,
-                                // im not entirely sure what this does
-                                showsConnector: index < announcements.count - 1
+                                showsConnector: index < announcements.count - 1,
+                                isRushAnnouncement: isRushFeed,
+                                loadMediaThumbnail: { mediaID in
+                                    try await apiService.fetchAnnouncementMediaThumbnail(
+                                        mediaID: mediaID,
+                                        isRushAnnouncement: isRushFeed
+                                    )
+                                }
                             )
                         }
                     }
@@ -74,9 +84,11 @@ struct AnnouncementsView: View {
         do {
             // just like java apiService calls from a diff class 
             // in this instance thats going to be @MemberAPIService.swift
-            let fetchedAnnouncements = try await apiService.fetchAnnouncements()
-            // what does $0 and $1 mean LOL
-            announcements = fetchedAnnouncements.sorted { $0.createdAt < $1.createdAt }
+            let fetchedAnnouncements = try await apiService.fetchAnnouncements(
+                for: authManager.currentUserGroup
+            )
+            // Match the website and API: the newest announcement appears first.
+            announcements = fetchedAnnouncements.sorted { $0.createdAt > $1.createdAt }
         } catch is CancellationError {
             return
         } catch {
@@ -105,6 +117,12 @@ struct AnnouncementsView: View {
 private struct AnnouncementThreadPost: View {
     let announcement: Announcement
     let showsConnector: Bool
+    let isRushAnnouncement: Bool
+    let loadMediaThumbnail: (String) async throws -> Data
+
+    private var authorTitle: String {
+        announcement.authorName ?? (isRushAnnouncement ? "KTP Rush Team" : "Kappa Theta Pi")
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 13) {
@@ -126,7 +144,7 @@ private struct AnnouncementThreadPost: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text("Kappa Theta Pi")
+                    Text(authorTitle)
                         .font(AppFont.subheadline(weight: .semibold))
                         .foregroundStyle(AppSystemColor.primaryLabel)
 
@@ -145,6 +163,48 @@ private struct AnnouncementThreadPost: View {
                     .foregroundStyle(AppSystemColor.primaryLabel)
                     .fixedSize(horizontal: false, vertical: true)
 
+                if let executiveTitle = announcement.authorExecutiveTitle {
+                    Label(executiveTitle, systemImage: "person.badge.shield.checkmark.fill")
+                        .font(AppFont.caption(weight: .medium))
+                        .foregroundStyle(AppSystemColor.secondaryLabel)
+                }
+
+                if !announcement.media.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(spacing: 10) {
+                            ForEach(announcement.media) { media in
+                                AnnouncementMediaThumbnail(
+                                    media: media,
+                                    loadData: { try await loadMediaThumbnail(media.id) }
+                                )
+                            }
+                        }
+                    }
+                    .contentMargins(.horizontal, 0, for: .scrollContent)
+                }
+
+                if !announcement.links.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(announcement.links) { link in
+                            Link(destination: link.url) {
+                                HStack(spacing: 9) {
+                                    Image(systemName: "arrow.up.right.square.fill")
+                                    Text(link.label)
+                                        .lineLimit(1)
+                                    Spacer(minLength: 8)
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 11, weight: .semibold))
+                                }
+                                .font(AppFont.footnote(weight: .semibold))
+                                .foregroundStyle(AppSystemColor.primaryLabel)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 10)
+                                .background(AppSystemColor.insetBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            }
+                        }
+                    }
+                }
+
                 if let updatedAt = announcement.updatedAt, updatedAt > announcement.createdAt {
                     Text("Edited \(updatedAt.formatted(.relative(presentation: .named)))")
                         .font(AppFont.caption())
@@ -155,6 +215,61 @@ private struct AnnouncementThreadPost: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct AnnouncementMediaThumbnail: View {
+    let media: AnnouncementMedia
+    let loadData: () async throws -> Data
+
+    @State private var image: UIImage?
+    @State private var didFail = false
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(AppSystemColor.insetBackground)
+
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else if didFail {
+                Image(systemName: media.isVideo ? "video.slash.fill" : "photo.badge.exclamationmark")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(AppSystemColor.secondaryLabel)
+            } else {
+                ProgressView()
+                    .tint(AppSystemColor.secondaryLabel)
+            }
+
+            if media.isVideo {
+                Image(systemName: "play.fill")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(.black.opacity(0.62), in: Circle())
+            }
+        }
+        .frame(width: 148, height: 104)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(AppSystemColor.separator.opacity(0.45), lineWidth: 1)
+        }
+        .accessibilityLabel(media.filename ?? (media.isVideo ? "Video attachment" : "Image attachment"))
+        .task(id: media.id) {
+            do {
+                let data = try await loadData()
+                guard !Task.isCancelled else { return }
+                image = UIImage(data: data)
+                didFail = image == nil
+            } catch is CancellationError {
+                return
+            } catch {
+                didFail = true
+            }
+        }
     }
 }
 
