@@ -17,6 +17,7 @@ struct MessageThreadsView: View {
     @State private var isRefreshing = false
     @State private var loadError: String?
     @State private var isShowingCachedThreads = false
+    @State private var mutedDirectUserIDs: Set<String> = []
     @State private var mutedGroupChatIDs: Set<String> = []
 
     private let offlineStore = MessageOfflineStore.shared
@@ -55,6 +56,7 @@ struct MessageThreadsView: View {
                         MessageThreadSection(
                             title: nil,
                             threads: directThreads,
+                            mutedDirectUserIDs: mutedDirectUserIDs,
                             mutedGroupChatIDs: mutedGroupChatIDs,
                             apiService: apiService
                         )
@@ -64,6 +66,7 @@ struct MessageThreadsView: View {
                         MessageThreadSection(
                             title: "Group Chats",
                             threads: groupThreads,
+                            mutedDirectUserIDs: mutedDirectUserIDs,
                             mutedGroupChatIDs: mutedGroupChatIDs,
                             apiService: apiService
                         )
@@ -76,7 +79,10 @@ struct MessageThreadsView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             guard newPhase == .active else { return }
-            Task { await loadConversations(showsLoadingState: false) }
+            Task {
+                await loadMutePreferences()
+                await loadConversations(showsLoadingState: false)
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .messageThreadShouldRefresh)) { _ in
             Task { await loadConversations(showsLoadingState: false) }
@@ -87,8 +93,8 @@ struct MessageThreadsView: View {
                 await loadConversations(showsLoadingState: false)
             }
         }
-        .onReceive(NotificationCenter.default.publisher(for: .groupChatMutePreferencesDidChange)) { _ in
-            mutedGroupChatIDs = GroupChatMutePreferences.mutedChatIDs
+        .onReceive(NotificationCenter.default.publisher(for: .messageMutePreferencesDidChange)) { _ in
+            applyCachedMutePreferences()
         }
     }
 
@@ -102,8 +108,9 @@ struct MessageThreadsView: View {
 
     @MainActor
     private func monitorConversations() async {
-        mutedGroupChatIDs = GroupChatMutePreferences.mutedChatIDs
+        applyCachedMutePreferences()
         await hydrateInboxCache()
+        await loadMutePreferences()
         await flushPendingMessages()
         await loadConversations(showsLoadingState: true)
 
@@ -116,6 +123,26 @@ struct MessageThreadsView: View {
 
             await loadConversations(showsLoadingState: false)
         }
+    }
+
+    @MainActor
+    private func loadMutePreferences() async {
+        do {
+            let preferences = try await apiService.fetchMessageMutePreferences()
+            preferences.cacheLocally()
+            mutedDirectUserIDs = Set(preferences.directUserIDs)
+            mutedGroupChatIDs = Set(preferences.groupChatIDs)
+        } catch is CancellationError {
+            return
+        } catch {
+            // Keep the last-known choices when the preference endpoint is offline.
+        }
+    }
+
+    @MainActor
+    private func applyCachedMutePreferences() {
+        mutedDirectUserIDs = DirectMessageMutePreferences.mutedUserIDs
+        mutedGroupChatIDs = GroupChatMutePreferences.mutedChatIDs
     }
 
     @MainActor
@@ -284,6 +311,7 @@ private struct MessageThreadSection: View {
     @Environment(\.colorScheme) private var colorScheme
     let title: String?
     let threads: [MessageThread]
+    let mutedDirectUserIDs: Set<String>
     let mutedGroupChatIDs: Set<String>
     let apiService: KTPAPIService
 
@@ -305,12 +333,21 @@ private struct MessageThreadSection: View {
                 NavigationLink(value: thread) {
                     MessageThreadCard(
                         thread: thread,
-                        isMuted: mutedGroupChatIDs.contains(thread.groupChatID ?? ""),
+                        isMuted: isMuted(thread),
                         apiService: apiService
                     )
                 }
                 .buttonStyle(.plain)
             }
+        }
+    }
+
+    private func isMuted(_ thread: MessageThread) -> Bool {
+        switch thread {
+        case .direct(let conversation):
+            mutedDirectUserIDs.contains(conversation.userId)
+        case .group(let chat):
+            mutedGroupChatIDs.contains(chat.id)
         }
     }
 }
@@ -543,7 +580,9 @@ struct MessageConversationView: View {
     @State private var deleteErrorMessage: String?
     @State private var attachmentDataByMessageID: [String: Data] = [:]
     @State private var groupDetailsChat: GroupChat?
-    @State private var isGroupChatMuted = false
+    @State private var isConversationMuted = false
+    @State private var isUpdatingMute = false
+    @State private var muteErrorMessage: String?
     @State private var isShowingCachedMessages = false
     @State private var pendingDeliveryCount = 0
     private let offlineStore = MessageOfflineStore.shared
@@ -622,6 +661,15 @@ struct MessageConversationView: View {
             if directConversation != nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        Button {
+                            Task { await setConversationMuted(!isConversationMuted) }
+                        } label: {
+                            Label(
+                                isConversationMuted ? "Unmute Member" : "Mute Member",
+                                systemImage: isConversationMuted ? "bell" : "bell.slash"
+                            )
+                        }
+
                         if isBlocked {
                             Button("Unblock Member") {
                                 Task { await setBlocked(false) }
@@ -634,7 +682,7 @@ struct MessageConversationView: View {
                     } label: {
                         Image(systemName: "ellipsis")
                     }
-                    .disabled(isUpdatingBlock)
+                    .disabled(isUpdatingBlock || isUpdatingMute)
                     .accessibilityLabel("Conversation options")
                 }
             } else if case .group(let chat) = thread {
@@ -647,17 +695,17 @@ struct MessageConversationView: View {
                         }
 
                         Button {
-                            isGroupChatMuted.toggle()
-                            GroupChatMutePreferences.setMuted(isGroupChatMuted, for: chat.id)
+                            Task { await setConversationMuted(!isConversationMuted) }
                         } label: {
                             Label(
-                                isGroupChatMuted ? "Unmute Group" : "Mute Group",
-                                systemImage: isGroupChatMuted ? "bell" : "bell.slash"
+                                isConversationMuted ? "Unmute Group" : "Mute Group",
+                                systemImage: isConversationMuted ? "bell" : "bell.slash"
                             )
                         }
                     } label: {
                         Image(systemName: "info.circle")
                     }
+                    .disabled(isUpdatingMute)
                     .accessibilityLabel("Group options")
                 }
             }
@@ -713,6 +761,14 @@ struct MessageConversationView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(blockErrorMessage ?? "Please try again.")
+        }
+        .alert("Couldn’t Update Mute", isPresented: Binding(
+            get: { muteErrorMessage != nil },
+            set: { if !$0 { muteErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(muteErrorMessage ?? "Please try again.")
         }
         .alert("Couldn’t Update Reaction", isPresented: Binding(
             get: { reactionErrorMessage != nil },
@@ -1121,12 +1177,62 @@ struct MessageConversationView: View {
     }
 
     @MainActor
+    private func loadMuteState() async {
+        switch thread {
+        case .direct(let conversation):
+            isConversationMuted = DirectMessageMutePreferences.isMuted(conversation.userId)
+        case .group(let chat):
+            isConversationMuted = GroupChatMutePreferences.isMuted(chat.id)
+        }
+
+        do {
+            let preferences = try await apiService.fetchMessageMutePreferences()
+            preferences.cacheLocally()
+            switch thread {
+            case .direct(let conversation):
+                isConversationMuted = preferences.directUserIDs.contains(conversation.userId)
+            case .group(let chat):
+                isConversationMuted = preferences.groupChatIDs.contains(chat.id)
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            // The local preference remains usable while offline.
+        }
+    }
+
+    @MainActor
+    private func setConversationMuted(_ shouldMute: Bool) async {
+        guard !isUpdatingMute else { return }
+        isUpdatingMute = true
+        muteErrorMessage = nil
+
+        do {
+            switch thread {
+            case .direct(let conversation):
+                let muted = try await apiService.setDirectMessageMuted(shouldMute, userID: conversation.userId)
+                isConversationMuted = muted
+                DirectMessageMutePreferences.setMuted(muted, for: conversation.userId)
+            case .group(let chat):
+                let muted = try await apiService.setGroupChatMuted(shouldMute, chatID: chat.id)
+                isConversationMuted = muted
+                GroupChatMutePreferences.setMuted(muted, for: chat.id)
+            }
+        } catch is CancellationError {
+            isUpdatingMute = false
+            return
+        } catch {
+            muteErrorMessage = "Could not update notification settings for this conversation. Please try again."
+        }
+
+        isUpdatingMute = false
+    }
+
+    @MainActor
     private func monitorConversation() async {
         await hydrateConversationCache()
         await loadBlockState()
-        if case .group(let chat) = thread {
-            isGroupChatMuted = GroupChatMutePreferences.isMuted(chat.id)
-        }
+        await loadMuteState()
         // Sender metadata should not delay the first history request.
         Task { await loadGroupMembers() }
         await flushPendingMessages()

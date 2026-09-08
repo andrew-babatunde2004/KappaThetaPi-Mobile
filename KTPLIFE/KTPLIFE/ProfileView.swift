@@ -13,6 +13,7 @@ struct ProfileView: View {
     @EnvironmentObject private var authManager: AuthManager
     @EnvironmentObject private var pushNotificationManager: PushNotificationManager
     @EnvironmentObject private var avatarRepository: AvatarRepository
+    @AppStorage(AppAppearance.storageKey) private var appearanceRawValue = AppAppearance.system.rawValue
     @State private var profile: UserProfile?
     @State private var firstName = ""
     @State private var lastName = ""
@@ -42,6 +43,10 @@ struct ProfileView: View {
         KTPAPIService(accessTokenProvider: { [authManager] in
             try await authManager.validAccessToken()
         })
+    }
+
+    private var selectedAppearance: AppAppearance {
+        AppAppearance(rawValue: appearanceRawValue) ?? .system
     }
 
     var body: some View {
@@ -76,6 +81,10 @@ struct ProfileView: View {
                 }
             }
         }
+        // Profile is presented in its own full-screen hosting controller. Apply
+        // the live preference at that boundary so Appearance changes—including
+        // returning to System—update before this screen is dismissed.
+        .preferredColorScheme(selectedAppearance.preferredColorScheme)
         .task {
             await loadProfile()
         }
@@ -553,28 +562,101 @@ private enum ProfilePictureError: LocalizedError {
 }
 
 private struct AppearanceSettingsView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage(AppAppearance.storageKey) private var appearanceRawValue = AppAppearance.system.rawValue
 
     private var selectedAppearance: AppAppearance {
         AppAppearance(rawValue: appearanceRawValue) ?? .system
     }
 
-    private var appearanceSelection: Binding<AppAppearance> {
-        Binding(
-            get: { selectedAppearance },
-            set: { appearanceRawValue = $0.rawValue }
-        )
+    private var previewUsesDarkColors: Bool {
+        selectedAppearance == .dark || (selectedAppearance == .system && colorScheme == .dark)
     }
 
     var body: some View {
         Form {
-            Picker("Appearance", selection: appearanceSelection) {
+            Section {
+                AppearancePreview(
+                    appearance: selectedAppearance,
+                    usesDarkColors: previewUsesDarkColors
+                )
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 10)
+            } header: {
+                Text("Preview")
+            } footer: {
+                Text("Your choice applies throughout KTP Life. The sign-in screen continues to follow your iPhone setting.")
+            }
+            .listRowBackground(Color.clear)
+
+            Section("Choose an appearance") {
                 ForEach(AppAppearance.allCases) { appearance in
-                    Text(appearance.title)
-                        .tag(appearance)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            appearanceRawValue = appearance.rawValue
+                        }
+                    } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: appearance.systemImage)
+                                .font(.system(size: 17, weight: .semibold))
+                                .foregroundStyle(
+                                    appearance == selectedAppearance
+                                        ? AppSystemColor.background
+                                        : AppSystemColor.primaryLabel
+                                )
+                                .frame(width: 38, height: 38)
+                                .background(
+                                    appearance == selectedAppearance
+                                        ? AppSystemColor.primaryLabel
+                                        : AppSystemColor.insetBackground,
+                                    in: RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                )
+
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(appearance.title)
+                                    .font(AppFont.subheadline(weight: .semibold))
+                                    .foregroundStyle(AppSystemColor.primaryLabel)
+
+                                Text(appearance.subtitle)
+                                    .font(AppFont.caption())
+                                    .foregroundStyle(AppSystemColor.secondaryLabel)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            Spacer(minLength: 10)
+
+                            Image(systemName: appearance == selectedAppearance ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 20, weight: .semibold))
+                                .foregroundStyle(
+                                    appearance == selectedAppearance
+                                        ? AppSurfaceColor.primaryControl
+                                        : AppSystemColor.secondaryLabel.opacity(0.5)
+                                )
+                        }
+                        .contentShape(Rectangle())
+                        .padding(.vertical, 5)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(appearance == selectedAppearance ? .isSelected : [])
                 }
             }
-            .pickerStyle(.segmented)
+            .listRowBackground(AppSystemColor.elevatedBackground)
+
+            Section("How it works") {
+                Label {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("System updates automatically")
+                            .font(AppFont.subheadline(weight: .semibold))
+                            .foregroundStyle(AppSystemColor.primaryLabel)
+                        Text("When System is selected, KTP Life changes with your iPhone’s scheduled or manual appearance.")
+                            .font(AppFont.caption())
+                            .foregroundStyle(AppSystemColor.secondaryLabel)
+                    }
+                } icon: {
+                    Image(systemName: "iphone.gen3")
+                        .foregroundStyle(AppSurfaceColor.primaryControl)
+                }
+            }
             .listRowBackground(AppSystemColor.elevatedBackground)
         }
         .tint(AppSurfaceColor.primaryControl)
@@ -583,6 +665,83 @@ private struct AppearanceSettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .scrollContentBackground(.hidden)
         .background(AppSystemColor.background)
+    }
+}
+
+private struct AppearancePreview: View {
+    let appearance: AppAppearance
+    let usesDarkColors: Bool
+
+    private var background: Color {
+        usesDarkColors ? .black : Color(uiColor: .systemGroupedBackground)
+    }
+
+    private var surface: Color {
+        usesDarkColors ? Color(white: 0.12) : .white
+    }
+
+    private var primary: Color {
+        usesDarkColors ? .white : Color(uiColor: .label)
+    }
+
+    private var secondary: Color {
+        usesDarkColors ? .white.opacity(0.58) : Color(uiColor: .secondaryLabel)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("KTP Life")
+                        .font(AppFont.subheadline(weight: .bold))
+                        .foregroundStyle(primary)
+                    Text(appearance.title)
+                        .font(AppFont.caption())
+                        .foregroundStyle(secondary)
+                }
+
+                Spacer()
+
+                Image(systemName: appearance.systemImage)
+                    .foregroundStyle(primary)
+                    .frame(width: 32, height: 32)
+                    .background(surface, in: Circle())
+            }
+            .padding(16)
+
+            VStack(spacing: 10) {
+                ForEach(0..<3, id: \.self) { index in
+                    HStack(spacing: 10) {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(index == 0 ? AppSurfaceColor.primaryControl : secondary.opacity(0.22))
+                            .frame(width: 34, height: 34)
+
+                        VStack(alignment: .leading, spacing: 5) {
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(primary.opacity(0.80))
+                                .frame(width: index == 1 ? 102 : 132, height: 6)
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(secondary.opacity(0.42))
+                                .frame(width: index == 2 ? 126 : 158, height: 5)
+                        }
+
+                        Spacer()
+                    }
+                    .padding(10)
+                    .background(surface, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+        }
+        .background(background, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(secondary.opacity(0.22), lineWidth: 1)
+        }
+        .animation(.easeInOut(duration: 0.18), value: usesDarkColors)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(appearance.title) appearance preview")
     }
 }
 

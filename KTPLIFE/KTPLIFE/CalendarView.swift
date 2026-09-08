@@ -112,8 +112,7 @@ struct CalendarView: View {
                 eyebrow: selectedDateEvents.isEmpty ? "NEXT UP" : "SELECTED DAY",
                 title: selectedDateEvents.isEmpty
                     ? "Upcoming"
-                    : selectedDate.formatted(.dateTime.weekday(.wide).month(.wide).day()),
-                count: viewModel.isLoading ? nil : visibleUpcomingEvents.count
+                    : selectedDate.formatted(.dateTime.weekday(.wide).month(.wide).day())
             )
 
             if viewModel.isShowingCachedEvents {
@@ -293,6 +292,7 @@ struct CalendarView: View {
         selectedDate = event.startDate
         displayedMonth = calendar.startOfMonth(for: event.startDate)
         userSelectedDate = true
+        selectedEventDetails = event
         deepLinkedEventID = nil
     }
 }
@@ -301,7 +301,6 @@ private struct CalendarAgendaHeader: View {
     @Environment(\.colorScheme) private var colorScheme
     let eyebrow: String
     let title: String
-    let count: Int?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -310,26 +309,11 @@ private struct CalendarAgendaHeader: View {
                 .tracking(1.35)
                 .foregroundStyle(CalendarDesign.accent)
 
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text(title)
-                    .font(AppFont.title(18))
-                    .foregroundStyle(CalendarDesign.title(for: colorScheme))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.82)
-                    .layoutPriority(1)
-
-                Spacer(minLength: 12)
-
-                if let count {
-                    Text(count == 1 ? "1 EVENT" : "\(count) EVENTS")
-                        .font(AppFont.caption(weight: .semibold))
-                        .tracking(0.4)
-                        .foregroundStyle(CalendarDesign.accent)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(CalendarDesign.accent.opacity(0.10), in: Capsule())
-                }
-            }
+            Text(title)
+                .font(AppFont.title(18))
+                .foregroundStyle(CalendarDesign.title(for: colorScheme))
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -359,6 +343,12 @@ private struct CalendarMonthPanel: View {
         displayedMonth.formatted(.dateTime.year())
     }
 
+    // September is the only month title wide enough to compete with the
+    // navigation controls on compact iPhone widths.
+    private var monthTitleSize: CGFloat {
+        calendar.component(.month, from: displayedMonth) == 9 ? 23 : 27
+    }
+
     private var monthID: Date {
         calendar.startOfMonth(for: displayedMonth)
     }
@@ -385,7 +375,7 @@ private struct CalendarMonthPanel: View {
                         .foregroundStyle(CalendarDesign.accent)
 
                     Text(monthTitle)
-                        .font(AppFont.largeTitle(27))
+                        .font(AppFont.largeTitle(monthTitleSize))
                         .foregroundStyle(CalendarDesign.title(for: colorScheme))
                 }
 
@@ -421,7 +411,7 @@ private struct CalendarMonthPanel: View {
                             CalendarDayCell(
                                 day: day,
                                 isSelected: calendar.isDate(day.date, inSameDayAs: selectedDate),
-                                eventCount: metadata.count,
+                                hasEvents: metadata.hasEvents,
                                 dotOffset: metadata.dotOffset,
                                 action: { selectDate(day.date) }
                             )
@@ -452,12 +442,9 @@ private struct CalendarMonthPanel: View {
 
         for event in events {
             let day = calendar.startOfDay(for: event.startDate)
-            if var metadata = metadataByDay[day] {
-                metadata.count = min(metadata.count + 1, 3)
-                metadataByDay[day] = metadata
-            } else {
+            if metadataByDay[day] == nil {
                 let dotOffset = Int(event.id.hashValue.magnitude % UInt(CalendarDesign.dotColors.count))
-                metadataByDay[day] = CalendarDayEventMetadata(count: 1, dotOffset: dotOffset)
+                metadataByDay[day] = CalendarDayEventMetadata(hasEvents: true, dotOffset: dotOffset)
             }
         }
 
@@ -490,7 +477,7 @@ private struct CalendarDayCell: View {
     @Environment(\.colorScheme) private var colorScheme
     let day: CalendarDay
     let isSelected: Bool
-    let eventCount: Int
+    let hasEvents: Bool
     let dotOffset: Int
     let action: () -> Void
 
@@ -521,13 +508,10 @@ private struct CalendarDayCell: View {
                         .frame(width: 38, height: 36)
                 }
 
-                HStack(spacing: 2) {
-                    ForEach(0..<eventCount, id: \.self) { index in
-                        Circle()
-                            .fill(CalendarDesign.dotColors[(index + dotOffset) % CalendarDesign.dotColors.count])
-                            .frame(width: 3.5, height: 3.5)
-                    }
-                }
+                Circle()
+                    .fill(CalendarDesign.dotColors[dotOffset % CalendarDesign.dotColors.count])
+                    .frame(width: 3.5, height: 3.5)
+                    .opacity(hasEvents ? 1 : 0)
                 .frame(height: 4)
             }
             .frame(maxWidth: .infinity, minHeight: 44)
@@ -552,8 +536,8 @@ private struct CalendarDayCell: View {
 
     private var accessibilityLabel: String {
         let date = day.date.formatted(.dateTime.weekday(.wide).month(.wide).day())
-        let eventLabel = eventCount == 1 ? "1 event" : "\(eventCount) events"
-        return isSelected ? "\(date), selected, \(eventLabel)" : "\(date), \(eventLabel)"
+        let eventLabel = hasEvents ? ", events scheduled" : ""
+        return isSelected ? "\(date), selected\(eventLabel)" : "\(date)\(eventLabel)"
     }
 }
 
@@ -921,10 +905,10 @@ private enum CalendarMonthTransitionDirection {
 }
 
 private struct CalendarDayEventMetadata {
-    var count: Int
+    let hasEvents: Bool
     let dotOffset: Int
 
-    static let empty = CalendarDayEventMetadata(count: 0, dotOffset: 0)
+    static let empty = CalendarDayEventMetadata(hasEvents: false, dotOffset: 0)
 }
 
 private enum CalendarDesign {
