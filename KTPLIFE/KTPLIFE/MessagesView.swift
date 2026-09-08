@@ -88,15 +88,11 @@ struct MessagesView: View {
                 Button {
                     selectedSection = .directory
                 } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 18, weight: .semibold))
+                    Text("Directory")
+                        .font(AppFont.subheadline(weight: .semibold))
                         .foregroundStyle(MessageDesign.primary(for: colorScheme))
-                        .frame(width: 40, height: 40)
-                        .background(MessageDesign.card(for: colorScheme), in: Circle())
-                        .overlay {
-                            Circle()
-                                .stroke(MessageDesign.border(for: colorScheme), lineWidth: 1)
-                        }
+                        .frame(minHeight: 40)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Open member directory")

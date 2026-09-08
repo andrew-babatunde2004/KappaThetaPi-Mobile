@@ -1102,7 +1102,6 @@ struct MessageConversationView: View {
             if shouldBlock {
                 try await apiService.blockUser(id: conversation.userId)
                 messages = []
-                draftMessage = ""
                 isComposerFocused = false
             } else {
                 try await apiService.unblockUser(id: conversation.userId)

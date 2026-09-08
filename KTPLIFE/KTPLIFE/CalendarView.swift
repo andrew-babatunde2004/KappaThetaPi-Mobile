@@ -226,7 +226,7 @@ struct CalendarView: View {
             }
 
             await MainActor.run {
-                updatingRSVPEventIDs.remove(event.id)
+                _ = updatingRSVPEventIDs.remove(event.id)
             }
         }
     }
@@ -912,7 +912,7 @@ private struct CalendarDay: Identifiable {
 
     var id: Date { date }
 
-    static let weekdaySymbols = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    static let weekdaySymbols = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 }
 
 private enum CalendarMonthTransitionDirection {
@@ -972,7 +972,7 @@ private enum CalendarDesign {
 private extension Calendar {
     static var ktpCalendar: Calendar {
         var calendar = Calendar.current
-        calendar.firstWeekday = 2
+        calendar.firstWeekday = 1
         return calendar
     }
 
@@ -983,10 +983,11 @@ private extension Calendar {
 
     func monthGrid(containing date: Date) -> [CalendarDay] {
         let monthStart = startOfMonth(for: date)
-        let range = range(of: .day, in: .month, for: monthStart) ?? 1..<31
         let leadingDays = (component(.weekday, from: monthStart) - firstWeekday + 7) % 7
         let gridStart = self.date(byAdding: .day, value: -leadingDays, to: monthStart) ?? monthStart
-        let totalCells = Int(ceil(Double(leadingDays + range.count) / 7.0)) * 7
+        // Always render six weeks so switching to a month whose dates fit in
+        // five rows (such as some Septembers) does not shift the agenda below.
+        let totalCells = 42
 
         return (0..<totalCells).compactMap { offset in
             guard let cellDate = self.date(byAdding: .day, value: offset, to: gridStart) else {

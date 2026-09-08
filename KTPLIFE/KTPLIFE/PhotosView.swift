@@ -945,23 +945,19 @@ private enum MediaTemporaryFile {
 
 private enum VideoThumbnailGenerator {
     static func image(from url: URL) async -> UIImage? {
-        await Task.detached(priority: .userInitiated) {
-            autoreleasepool {
-                let asset = AVAsset(url: url)
-                let generator = AVAssetImageGenerator(asset: asset)
-                generator.appliesPreferredTrackTransform = true
-                generator.maximumSize = CGSize(width: 640, height: 640)
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: 640, height: 640)
 
-                let requestedTime = CMTime(seconds: 0.1, preferredTimescale: 600)
-                let cgImage = (try? generator.copyCGImage(at: requestedTime, actualTime: nil))
-                    ?? (try? generator.copyCGImage(at: .zero, actualTime: nil))
-                guard let cgImage else {
-                    return nil
-                }
-
-                return UIImage(cgImage: cgImage)
-            }
-        }.value
+        let requestedTime = CMTime(seconds: 0.1, preferredTimescale: 600)
+        if let (cgImage, _) = try? await generator.image(at: requestedTime) {
+            return UIImage(cgImage: cgImage)
+        }
+        if let (cgImage, _) = try? await generator.image(at: .zero) {
+            return UIImage(cgImage: cgImage)
+        }
+        return nil
     }
 }
 

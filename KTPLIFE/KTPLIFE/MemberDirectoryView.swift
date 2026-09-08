@@ -474,15 +474,16 @@ struct MemberDirectoryView: View {
                     if !details.isEmpty {
                         profileSection(title: "Details") {
                             VStack(spacing: 0) {
-                                ForEach(Array(details.enumerated()), id: \.element.id) { index, detail in
+                                profileDetailDivider
+
+                                ForEach(details) { detail in
                                     detailRow(detail.title, detail.value)
 
-                                    if index < details.count - 1 {
-                                        Divider()
-                                    }
+                                    profileDetailDivider
                                 }
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(AppSystemColor.background)
                         }
                     }
 
@@ -717,6 +718,12 @@ struct MemberDirectoryView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 12)
+        }
+
+        private var profileDetailDivider: some View {
+            Rectangle()
+                .fill(AppSystemColor.separator.opacity(colorScheme == .dark ? 0.72 : 0.5))
+                .frame(height: 0.5)
         }
     }
 
