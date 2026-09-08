@@ -272,10 +272,6 @@ struct MemberDirectoryView: View {
             return "\(member.role) '\(year.suffix(2))"
         }
 
-        private var groupLine: String {
-            "\(member.group.shortTitle.lowercased()) | member"
-        }
-        
         var body: some View {
             HStack(alignment: .center, spacing: 12) {
                 Button(action: selectMember) {
@@ -296,10 +292,6 @@ struct MemberDirectoryView: View {
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.72)
 
-                            Text(groupLine)
-                                .font(AppFont.footnote())
-                                .foregroundStyle(DirectoryDesign.primary(for: colorScheme))
-                                .lineLimit(1)
                         }
 
                         Spacer(minLength: 0)
