@@ -3,15 +3,16 @@
 //  KTPLIFE
 //
 
+import SafariServices
 import SwiftUI
 
 struct SSOLoginView: View {
-    @Environment(\.openURL) private var openURL
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var typedRecruitmentQuestion = ""
     @State private var typewriterTask: Task<Void, Never>?
+    @State private var enrollmentPage: EnrollmentPage?
 
     let isLoading: Bool
     let errorMessage: String?
@@ -87,6 +88,9 @@ struct SSOLoginView: View {
             typewriterTask?.cancel()
             typewriterTask = nil
         }
+        .sheet(item: $enrollmentPage) { page in
+            EnrollmentSafariView(url: page.url)
+        }
     }
 
     @ViewBuilder
@@ -158,7 +162,7 @@ struct SSOLoginView: View {
             .opacity(isLoading ? 0.72 : 1)
 
             Button {
-                openURL(rushEnrollmentURL)
+                enrollmentPage = EnrollmentPage(url: rushEnrollmentURL)
             } label: {
                 Text("Sign Up for Rush")
                     .font(.system(size: 19, weight: .bold, design: .default))
@@ -231,6 +235,25 @@ struct SSOLoginView: View {
             }
         }
     }
+}
+
+private struct EnrollmentPage: Identifiable {
+    let url: URL
+    var id: URL { url }
+}
+
+private struct EnrollmentSafariView: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        let configuration = SFSafariViewController.Configuration()
+        configuration.entersReaderIfAvailable = false
+        let controller = SFSafariViewController(url: url, configuration: configuration)
+        controller.dismissButtonStyle = .close
+        return controller
+    }
+
+    func updateUIViewController(_ uiViewController: SFSafariViewController, context: Context) {}
 }
 
 private enum SSOLoginLayout {
