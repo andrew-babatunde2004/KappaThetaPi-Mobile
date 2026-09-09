@@ -419,7 +419,9 @@ struct ContentView: View {
             selectedTab = .calendar
             pushEventID = eventID
         case .interview:
-            presentedFullScreen = .interviews
+            if authManager.currentUserGroup == .rush {
+                presentedFullScreen = .interviews
+            }
         }
     }
 
