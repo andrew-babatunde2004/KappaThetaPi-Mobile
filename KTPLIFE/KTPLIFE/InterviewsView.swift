@@ -34,9 +34,7 @@ struct InterviewsView: View {
                                     Text(description).font(AppFont.footnote()).foregroundStyle(AppSystemColor.secondaryLabel)
                                 }
                                 ForEach(schedule.slots) { slot in
-                                    InterviewSlotRow(slot: slot, isWorking: actionSlotID == slot.id) {
-                                        Task { await performAction(for: slot) }
-                                    }
+                                    slotRow(for: slot, in: schedule)
                                 }
                             }
                             .padding(16)
@@ -73,19 +71,38 @@ struct InterviewsView: View {
             await loadSchedules()
         } catch { errorMessage = slot.mine ? "Your interview could not be cancelled." : "That interview time is no longer available." }
     }
+
+    private func slotRow(for slot: InterviewSlot, in schedule: InterviewSchedule) -> some View {
+        InterviewSlotRow(
+            slot: slot,
+            scheduleLocation: schedule.location,
+            isWorking: actionSlotID == slot.id
+        ) {
+            Task { await performAction(for: slot) }
+        }
+    }
 }
 
 private struct InterviewSlotRow: View {
     let slot: InterviewSlot
+    let scheduleLocation: String?
     let isWorking: Bool
     let action: () -> Void
+
+    private var location: String? {
+        let slotLocation = slot.location?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let slotLocation, !slotLocation.isEmpty { return slotLocation }
+
+        let scheduleLocation = scheduleLocation?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return scheduleLocation?.isEmpty == false ? scheduleLocation : nil
+    }
 
     var body: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
                 Text(slot.startsAt, format: .dateTime.weekday(.abbreviated).month(.abbreviated).day().hour().minute())
                     .font(AppFont.subheadline(weight: .semibold))
-                if let location = slot.location, !location.isEmpty {
+                if let location {
                     Label(location, systemImage: "mappin.and.ellipse").font(AppFont.footnote()).foregroundStyle(AppSystemColor.secondaryLabel)
                 }
             }

@@ -41,6 +41,10 @@ struct HomeView: View {
         activeGroup?.canAccessAttendance != false
     }
 
+    private var canAccessInterviews: Bool {
+        activeGroup == .rush
+    }
+
     private var calendarService: CalendarNetworkService {
         CalendarNetworkService(accessTokenProvider: { [authManager] in
             try await authManager.validAccessToken()
@@ -208,12 +212,14 @@ struct HomeView: View {
                     .gridCellColumns(2)
                 }
 
-                HomeNavigationItem(
-                    title: "Interviews",
-                    systemImage: "person.crop.rectangle.stack",
-                    action: showInterviews
-                )
-                .gridCellColumns(2)
+                if canAccessInterviews {
+                    HomeNavigationItem(
+                        title: "Interviews",
+                        systemImage: "person.crop.rectangle.stack",
+                        action: showInterviews
+                    )
+                    .gridCellColumns(2)
+                }
             }
         }
     }
