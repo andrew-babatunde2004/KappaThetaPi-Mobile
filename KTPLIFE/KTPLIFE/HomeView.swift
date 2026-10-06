@@ -6,6 +6,7 @@
 import SwiftUI
 
 struct HomeView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @EnvironmentObject private var authManager: AuthManager
     @State private var events: [CalendarEvent] = []
@@ -20,6 +21,7 @@ struct HomeView: View {
     let showPolls: () -> Void
     let showAnnouncements: () -> Void
     let showMeetings: () -> Void
+    let showAttendance: () -> Void
     let showInterviews: () -> Void
     let openQRScanner: () -> Void
     let openEvent: (String) -> Void
@@ -97,6 +99,12 @@ struct HomeView: View {
             // Only the artwork extends behind the status bar. When there is no
             // hero, preserve the normal top safe area for the greeting.
             .ignoresSafeArea(edges: showsHero ? .top : [])
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { weekEvents = eventsInCurrentWeek(from: events) }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+            weekEvents = eventsInCurrentWeek(from: events)
         }
         .task {
             await loadEvents()
@@ -209,7 +217,14 @@ struct HomeView: View {
                         systemImage: "person.2.badge.gearshape",
                         action: showMeetings
                     )
-                    .gridCellColumns(2)
+                }
+
+                if canAccessAttendance {
+                    HomeNavigationItem(
+                        title: "Attendance",
+                        systemImage: "checkmark.seal.fill",
+                        action: showAttendance
+                    )
                 }
 
                 if canAccessInterviews {
@@ -251,12 +266,13 @@ struct HomeView: View {
     }
 
     private func eventsInCurrentWeek(from events: [CalendarEvent]) -> [CalendarEvent] {
-        guard let week = Calendar.current.dateInterval(of: .weekOfYear, for: Date()) else {
+        let today = Calendar.current.startOfDay(for: Date())
+        guard let week = Calendar.current.dateInterval(of: .weekOfYear, for: today) else {
             return []
         }
 
         return events
-            .filter { $0.endDate >= week.start && $0.startDate < week.end }
+            .filter { $0.startDate >= today && $0.startDate < week.end }
             .sorted { $0.startDate < $1.startDate }
     }
 
@@ -833,6 +849,7 @@ private enum HomeHeroConfiguration {
         showPolls: {},
         showAnnouncements: {},
         showMeetings: {},
+        showAttendance: {},
         showInterviews: {},
         openQRScanner: {},
         openEvent: { _ in },
@@ -852,6 +869,7 @@ private enum HomeHeroConfiguration {
         showPolls: {},
         showAnnouncements: {},
         showMeetings: {},
+        showAttendance: {},
         showInterviews: {},
         openQRScanner: {},
         openEvent: { _ in },

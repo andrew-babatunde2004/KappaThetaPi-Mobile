@@ -156,6 +156,9 @@ struct ContentView: View {
             case .meetings:
                 MeetingsView()
                     .environmentObject(authManager)
+            case .attendance:
+                AttendanceLogView()
+                    .environmentObject(authManager)
             case .interviews:
                 InterviewsView()
                     .environmentObject(authManager)
@@ -217,9 +220,9 @@ struct ContentView: View {
             SSOLoginView(
                 isLoading: authManager.isBusy,
                 errorMessage: authManager.errorMessage,
-                signIn: {
+                signIn: { username, password in
                     Task {
-                        await authManager.signInWithSSO()
+                        await authManager.signInWithUsernameAndPassword(username: username, password: password)
                     }
                 },
                 signInWithDifferentAccount: {
@@ -283,6 +286,7 @@ struct ContentView: View {
                 showPolls: { presentedFullScreen = .polls },
                 showAnnouncements: { presentedFullScreen = .announcements },
                 showMeetings: { presentedFullScreen = .meetings },
+                showAttendance: { presentedFullScreen = .attendance },
                 showInterviews: { presentedFullScreen = .interviews },
                 openQRScanner: { presentedSheet = .qrScanner },
                 openEvent: { eventID in
@@ -549,6 +553,7 @@ private enum AppFullScreenDestination: String, Identifiable {
     case polls
     case announcements
     case meetings
+    case attendance
     case interviews
     case profile
 

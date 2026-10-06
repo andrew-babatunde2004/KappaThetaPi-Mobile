@@ -16,7 +16,6 @@ struct PhotosView: View {
     @EnvironmentObject private var galleryContentCache: GalleryContentCache
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    @Environment(\.displayScale) private var displayScale
     @State private var photos: [PhotoItem] = []
     @State private var preparedThumbnails: [String: UIImage] = [:]
     @State private var albums: [PhotoAlbum] = [.general]
@@ -255,39 +254,17 @@ struct PhotosView: View {
         
         do {
             let loadedPhotos = try await photoService.fetchPhotos(albumId: album.apiAlbumID)
-            var loadedThumbnails: [String: UIImage] = [:]
-            let batchSize = 6
-            for batchStart in stride(from: 0, to: loadedPhotos.count, by: batchSize) {
-                let batchEnd = min(batchStart + batchSize, loadedPhotos.count)
-                let tasks = loadedPhotos[batchStart..<batchEnd].map { photo in
-                    Task { @MainActor in
-                        (photo.id, await prepareThumbnail(for: photo))
-                    }
-                }
+            guard !Task.isCancelled else { return }
 
-                for (batchIndex, task) in tasks.enumerated() {
-                    guard !Task.isCancelled else {
-                        tasks.forEach { $0.cancel() }
-                        return
-                    }
-
-                    let (photoID, thumbnail) = await task.value
-                    if let thumbnail {
-                        loadedThumbnails[photoID] = thumbnail
-                    }
-                    let completedCount = batchStart + batchIndex + 1
-                    galleryLoadProgress = Double(completedCount) / Double(max(loadedPhotos.count, 1))
-                }
-            }
-
-            preparedThumbnails = loadedThumbnails
+            // Let the lazy grid request thumbnail derivatives only for its
+            // visible tiles. Waiting for every original file here made even a
+            // large album appear blank until the last download completed.
+            preparedThumbnails = [:]
             photos = loadedPhotos
             if album.apiAlbumID == nil {
-                galleryContentCache.store(photos: loadedPhotos, thumbnails: loadedThumbnails)
+                galleryContentCache.store(photos: loadedPhotos, thumbnails: [:])
             }
-            if loadedPhotos.isEmpty {
-                galleryLoadProgress = 1
-            }
+            galleryLoadProgress = 1
             loadError = nil
         } catch {
             photos = []
@@ -318,28 +295,6 @@ struct PhotosView: View {
         }
     }
 
-    @MainActor
-    private func prepareThumbnail(for photo: PhotoItem) async -> UIImage? {
-        if photo.isVideo {
-            do {
-                let data = try await photoService.fetchMediaData(for: photo)
-                let url = try await MediaTemporaryFile.write(data: data, suggestedPath: photo.imagePath)
-                defer { try? FileManager.default.removeItem(at: url) }
-                return await VideoThumbnailGenerator.image(from: url)
-            } catch {
-                return nil
-            }
-        }
-
-        return await thumbnailRepository.image(
-            for: "gallery-\(photo.id)",
-            pointSize: 180,
-            displayScale: displayScale,
-            loadData: { try await photoService.fetchMediaData(for: photo) }
-        )
-    }
-    
-    
     private var photoActionsMenu: some View {
         Menu {
             Section("Albums") {
@@ -447,12 +402,6 @@ struct PhotosView: View {
 
             if !uploadedPhotos.isEmpty {
                 photos.insert(contentsOf: uploadedPhotos.reversed(), at: 0)
-
-                for photo in uploadedPhotos {
-                    if let thumbnail = await prepareThumbnail(for: photo) {
-                        preparedThumbnails[photo.id] = thumbnail
-                    }
-                }
 
                 if selectedAlbum.apiAlbumID == nil {
                     galleryContentCache.store(photos: photos, thumbnails: preparedThumbnails)
@@ -689,25 +638,11 @@ private struct AuthenticatedPhotoTile: View {
             return
         }
 
-        if photo.isVideo {
-            do {
-                let data = try await photoService.fetchMediaData(for: photo)
-                let url = try await MediaTemporaryFile.write(data: data, suggestedPath: photo.imagePath)
-                defer { try? FileManager.default.removeItem(at: url) }
-                image = await VideoThumbnailGenerator.image(from: url)
-            } catch is CancellationError {
-                return
-            } catch {
-                image = nil
-            }
-            return
-        }
-
         let thumbnail = await thumbnailRepository.image(
             for: "gallery-\(photo.id)",
             pointSize: size.width,
             displayScale: displayScale,
-            loadData: { try await photoService.fetchMediaData(for: photo) }
+            loadData: { try await photoService.fetchThumbnailData(for: photo) }
         )
         guard !Task.isCancelled else { return }
         image = thumbnail

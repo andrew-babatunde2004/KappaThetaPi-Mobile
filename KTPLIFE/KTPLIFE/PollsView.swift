@@ -8,6 +8,8 @@ struct PollsView: View {
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var votingPollIDs: Set<String> = []
+    @State private var voterStatsByPollID: [String: PollStats] = [:]
+    @State private var loadingVoterStatsPollIDs: Set<String> = []
     @State private var voteError: PollError?
 
     private var apiService: KTPAPIService {
@@ -89,9 +91,30 @@ struct PollsView: View {
                     poll: poll,
                     selectedOptionIDs: selection(for: poll),
                     isVoting: votingPollIDs.contains(poll.id),
+                    voterStats: voterStatsByPollID[poll.id],
+                    isLoadingVoterStats: loadingVoterStatsPollIDs.contains(poll.id),
                     selectOption: { select($0, on: poll) },
-                    submitMultiSelection: { submitVote(for: poll) }
+                    submitMultiSelection: { submitVote(for: poll) },
+                    showVoters: { loadVoterStats(for: poll) }
                 )
+            }
+        }
+    }
+
+    private func loadVoterStats(for poll: Poll) {
+        guard poll.votersVisible,
+              voterStatsByPollID[poll.id] == nil,
+              loadingVoterStatsPollIDs.insert(poll.id).inserted else { return }
+
+        Task { @MainActor in
+            defer { loadingVoterStatsPollIDs.remove(poll.id) }
+            do {
+                voterStatsByPollID[poll.id] = try await apiService.fetchPollStats(for: poll.id)
+            } catch is CancellationError {
+                return
+            } catch {
+                // The server remains authoritative; if a poll is changed while
+                // this request is in flight, quietly keep names hidden.
             }
         }
     }
@@ -170,8 +193,11 @@ private struct PollCard: View {
     let poll: Poll
     let selectedOptionIDs: Set<String>
     let isVoting: Bool
+    let voterStats: PollStats?
+    let isLoadingVoterStats: Bool
     let selectOption: (String) -> Void
     let submitMultiSelection: () -> Void
+    let showVoters: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -231,6 +257,15 @@ private struct PollCard: View {
                     .disabled(poll.isCurrentlyClosed || isVoting)
                     .accessibilityLabel("\(option.title), \(option.voteCount) votes")
                     .accessibilityAddTraits(isSelected(option) ? .isSelected : [])
+
+                    if let voters = voterStats?.options.first(where: { $0.id == option.id })?.voters,
+                       !voters.isEmpty {
+                        Text(voters.map(\.displayName).joined(separator: ", "))
+                            .font(AppFont.caption())
+                            .foregroundStyle(AppSystemColor.secondaryLabel)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                    }
                 }
             }
 
@@ -248,6 +283,15 @@ private struct PollCard: View {
                     .font(AppFont.footnote(weight: .semibold))
                     .buttonStyle(.glassProminent)
                     .disabled(selectedOptionIDs.isEmpty || isVoting)
+                }
+
+                if poll.votersVisible, voterStats == nil {
+                    Button(isLoadingVoterStats ? "Loading voters…" : "Show voters") {
+                        showVoters()
+                    }
+                    .font(AppFont.footnote(weight: .semibold))
+                    .buttonStyle(.bordered)
+                    .disabled(isLoadingVoterStats)
                 }
             }
         }

@@ -10,6 +10,8 @@ struct Poll: Identifiable, Equatable, Decodable {
     let expiresAt: Date?
     let myOptionIDs: Set<String>
     let totalVotes: Int
+    let resultsVisible: Bool
+    let votersVisible: Bool
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -24,6 +26,8 @@ struct Poll: Identifiable, Equatable, Decodable {
         case expiresAt = "expires_at"
         case myOptionIDs = "my_option_ids"
         case totalVotes = "total_votes"
+        case resultsVisible = "results_visible"
+        case votersVisible = "voters_visible"
     }
 
     var isCurrentlyClosed: Bool {
@@ -47,6 +51,8 @@ struct Poll: Identifiable, Equatable, Decodable {
         expiresAt = container.pollDate(for: .expiresAt)
         myOptionIDs = Set(container.pollStringArray(for: .myOptionIDs))
         totalVotes = container.pollInt(for: .totalVotes) ?? 0
+        resultsVisible = container.pollBool(for: .resultsVisible) ?? false
+        votersVisible = container.pollBool(for: .votersVisible) ?? false
     }
 
     static func decodePolls(from data: Data) throws -> [Poll] {
@@ -69,6 +75,54 @@ struct Poll: Identifiable, Equatable, Decodable {
         }
 
         throw KTPAPIError.decodeFailed("The response did not contain a supported poll list.")
+    }
+}
+
+/// The server returns voter identities only for polls that explicitly permit
+/// them and only after the caller may see that poll's results.
+struct PollStats: Decodable {
+    let options: [PollOptionStats]
+}
+
+struct PollOptionStats: Identifiable, Decodable {
+    let id: String
+    let voters: [PollVoter]
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case voters
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = container.pollString(for: .id) ?? UUID().uuidString
+        voters = (try? container.decodeIfPresent([PollVoter].self, forKey: .voters)) ?? []
+    }
+}
+
+struct PollVoter: Identifiable, Decodable {
+    let authentikID: String
+    let username: String?
+    let firstName: String?
+    let lastName: String?
+    let preferredName: String?
+
+    var id: String { authentikID }
+
+    enum CodingKeys: String, CodingKey {
+        case authentikID = "authentik_id"
+        case username
+        case firstName = "first_name"
+        case lastName = "last_name"
+        case preferredName = "preferred_name"
+    }
+
+    var displayName: String {
+        if let preferredName = preferredName?.nonEmptyTrimmed { return preferredName }
+        let fullName = [firstName, lastName]
+            .compactMap { $0?.nonEmptyTrimmed }
+            .joined(separator: " ")
+        return fullName.nonEmptyTrimmed ?? username?.nonEmptyTrimmed ?? "Member"
     }
 }
 

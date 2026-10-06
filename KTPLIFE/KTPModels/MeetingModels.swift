@@ -31,9 +31,14 @@ struct Meeting: Identifiable, Equatable, Decodable {
         case description
         case location
         case startsAt = "starts_at"
-        case startDate = "start_date"
+        // `GET /meetings` returns the calendar-shaped camelCase keys. Keep
+        // both older spellings as fallbacks so a staged API rollout cannot
+        // turn every meeting into `.distantPast` (displayed as Dec 31).
+        case startDate = "startDate"
+        case legacyStartDate = "start_date"
         case endsAt = "ends_at"
-        case endDate = "end_date"
+        case endDate = "endDate"
+        case legacyEndDate = "end_date"
         case status
         case myResponse = "my_response"
         case response
@@ -58,9 +63,11 @@ struct Meeting: Identifiable, Equatable, Decodable {
         location = try container.decodeIfPresent(String.self, forKey: .location)
         startsAt = try container.meetingDate(for: .startsAt)
             ?? container.meetingDate(for: .startDate)
+            ?? container.meetingDate(for: .legacyStartDate)
             ?? .distantPast
         endsAt = try container.meetingDate(for: .endsAt)
             ?? container.meetingDate(for: .endDate)
+            ?? container.meetingDate(for: .legacyEndDate)
         status = try container.decodeIfPresent(String.self, forKey: .status) ?? "scheduled"
 
         let responseValue = try container.decodeIfPresent(String.self, forKey: .myResponse)

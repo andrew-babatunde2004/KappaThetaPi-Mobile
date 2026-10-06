@@ -7,6 +7,19 @@ enum KTPAPIError: Error {
     case emptyResponse
 }
 
+/// Public rush-enrollment state shared with the website. The API only returns
+/// the invitation URL while enrollment is actually open, so the app cannot
+/// advertise a stale signup link after eboard closes the window.
+struct RushSignupAvailability: Decodable, Equatable {
+    let isOpen: Bool
+    let signupURL: URL?
+
+    private enum CodingKeys: String, CodingKey {
+        case isOpen = "is_open"
+        case signupURL = "signup_url"
+    }
+}
+
 enum ConversationSyncResponse {
     case notModified
     case updated(page: ConversationMessagePage, eTag: String?)
@@ -32,6 +45,27 @@ final class KTPAPIService {
         self.baseURL = baseURL
         self.session = session
         self.accessTokenProvider = accessTokenProvider
+    }
+
+    /// Reads the same public rush-window state that powers the website's
+    /// enrollment button. This route intentionally requires no access token.
+    func fetchPublicRushSignupAvailability() async throws -> RushSignupAvailability {
+        let url = baseURL
+            .appendingPathComponent("rush-signup")
+            .appendingPathComponent("current")
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 5
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard 200..<300 ~= httpResponse.statusCode else {
+            throw KTPAPIError.badStatusCode(
+                httpResponse.statusCode,
+                String(data: data, encoding: .utf8) ?? "No response body"
+            )
+        }
+        return try JSONDecoder().decode(RushSignupAvailability.self, from: data)
     }
 
     /// Fetches all completed member profiles from protected `GET /members`.
@@ -552,6 +586,17 @@ final class KTPAPIService {
             AuthDebugLog.log("Polls decode failed: \(error.localizedDescription). Body=\(responseBody)")
             throw KTPAPIError.decodeFailed(error.localizedDescription)
         }
+    }
+
+    /// Returns the named vote breakdown only when the API has authorized this
+    /// member to see it. The server enforces the poll's show-voters setting.
+    func fetchPollStats(for pollID: String) async throws -> PollStats {
+        let url = baseURL
+            .appendingPathComponent("polls")
+            .appendingPathComponent(pollID)
+            .appendingPathComponent("stats")
+        let data = try await fetchProtectedData(from: url, logLabel: "poll stats \(pollID)")
+        return try JSONDecoder().decode(PollStats.self, from: data)
     }
 
     /// Fetches the announcement board that matches the authenticated account.

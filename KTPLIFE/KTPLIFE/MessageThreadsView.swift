@@ -574,6 +574,8 @@ struct MessageConversationView: View {
     @State private var updatingReactionKeys: Set<String> = []
     @State private var reactionErrorMessage: String?
     @State private var reactionDetails: MessageReactionDetails?
+    @State private var customReactionMessage: KTPMessage?
+    @State private var customReactionEmoji = ""
     @State private var replyingTo: KTPMessage?
     @State private var messagePendingDeletion: KTPMessage?
     @State private var deletingMessageIDs: Set<String> = []
@@ -714,6 +716,7 @@ struct MessageConversationView: View {
         .padding(.top, 10)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if !isBlocked {
+              VStack(spacing: 0) {
                 MessageComposerView(
                     replyTo: replyingTo.map(replyReference(for:)),
                     cancelReply: { replyingTo = nil },
@@ -722,6 +725,24 @@ struct MessageConversationView: View {
                     },
                     focusChanged: handleComposerFocusChange
                 )
+                    .frame(height: customReactionMessage == nil ? nil : 0)
+                    .clipped()
+                    .allowsHitTesting(customReactionMessage == nil)
+                    .accessibilityHidden(customReactionMessage != nil)
+                if let message = customReactionMessage {
+                    HStack {
+                        NativeEmojiReactionInput(emoji: $customReactionEmoji)
+                        .frame(height: 44)
+                        Button("React") {
+                            let emoji = customReactionEmoji
+                            customReactionMessage = nil
+                            Task { await toggleReaction(emoji, on: message) }
+                        }
+                        .disabled(customReactionEmoji.isEmpty)
+                        Button("Cancel") { customReactionMessage = nil }
+                    }
+                }
+              }
                     .padding(.horizontal, 20)
                     .padding(.top, 10)
                     .padding(.bottom, 8)
@@ -954,6 +975,10 @@ struct MessageConversationView: View {
                     updatingEmojis: updatingEmojis(for: message),
                     toggleReaction: { emoji in
                         Task { await toggleReaction(emoji, on: message) }
+                    },
+                    chooseCustomReaction: {
+                        customReactionEmoji = ""
+                        customReactionMessage = message
                     },
                     showReactionDetails: { reaction in
                         reactionDetails = MessageReactionDetails(messageID: message.id, reaction: reaction)
@@ -2176,6 +2201,7 @@ private struct MessageBubble: View {
     let reactions: [MessageReactionSummary]
     let updatingEmojis: Set<String>
     let toggleReaction: (String) -> Void
+    let chooseCustomReaction: () -> Void
     let showReactionDetails: (MessageReactionSummary) -> Void
     let deleteMessage: (() -> Void)?
     let isDeleting: Bool
@@ -2294,6 +2320,17 @@ private struct MessageBubble: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .center)
+
+                Button {
+                    showsMessageActions = false
+                    chooseCustomReaction()
+                } label: {
+                    Label("Choose Emoji…", systemImage: "face.smiling")
+                        .font(AppFont.footnote(weight: .semibold))
+                        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
 
             if let reportMessage {
@@ -2595,6 +2632,72 @@ struct MessagePickedImage: Transferable {
 private enum MessageReactionOptions {
     static let emojis = ["👍", "❤️", "😂", "🎉", "😮"]
 }
+
+/// The system keyboard supplies every emoji the member has enabled, including
+/// multi-scalar emoji such as skin-tone and family variants. The API remains
+/// the authority on whether the submitted value is one valid emoji.
+private struct NativeEmojiReactionInput: UIViewRepresentable {
+    @Binding var emoji: String
+
+    func makeCoordinator() -> Coordinator { Coordinator(emoji: $emoji) }
+
+    func makeUIView(context: Context) -> EmojiReactionTextField {
+        let field = EmojiReactionTextField()
+        field.placeholder = "Choose an emoji to react"
+        field.accessibilityLabel = "Emoji reaction"
+        field.font = .preferredFont(forTextStyle: .title2)
+        field.autocorrectionType = .no
+        field.addTarget(context.coordinator, action: #selector(Coordinator.changed(_:)), for: .editingChanged)
+        return field
+    }
+
+    func updateUIView(_ field: EmojiReactionTextField, context: Context) {
+        context.coordinator.emoji = $emoji
+        if field.markedTextRange == nil, field.text != emoji {
+            field.text = emoji
+        }
+    }
+
+    static func dismantleUIView(_ field: EmojiReactionTextField, coordinator: Coordinator) {
+        field.resignFirstResponder()
+    }
+
+    final class Coordinator: NSObject {
+        var emoji: Binding<String>
+        init(emoji: Binding<String>) { self.emoji = emoji }
+
+        @objc func changed(_ field: UITextField) {
+            // Wait for composed keyboard input to finish before validating it.
+            guard field.markedTextRange == nil else { return }
+            let selection = (field.text ?? "").last(where: { character in
+                character.unicodeScalars.contains { scalar in
+                    scalar.properties.isEmoji && scalar.value > 0x7F
+                } || character.unicodeScalars.contains { $0.value == 0x20E3 }
+            }).map(String.init) ?? ""
+            field.text = selection
+            emoji.wrappedValue = selection
+        }
+    }
+}
+
+private final class EmojiReactionTextField: UITextField {
+
+    override var textInputContextIdentifier: String? { "ktp-emoji-reaction" }
+    override var textInputMode: UITextInputMode? {
+        UITextInputMode.activeInputModes.first { $0.primaryLanguage == "emoji" } ?? super.textInputMode
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.window != nil else { return }
+            self.becomeFirstResponder()
+        }
+    }
+
+}
+
 
 private struct AuthenticatedMessageAvatar: View {
     @Environment(\.colorScheme) private var colorScheme

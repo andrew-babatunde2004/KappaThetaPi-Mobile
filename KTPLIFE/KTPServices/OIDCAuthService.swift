@@ -18,6 +18,8 @@ enum AuthServiceError: LocalizedError {
     case invalidTokenResponse
     case cancelled
     case authorizationFailed(String, String?)
+    case credentialRejected(String)
+    case credentialFlowUnsupported
     case badStatusCode(Int, String)
 
     var errorDescription: String? {
@@ -40,6 +42,10 @@ enum AuthServiceError: LocalizedError {
             }
 
             return "Authorization failed: \(error)."
+        case .credentialRejected(let message):
+            return message
+        case .credentialFlowUnsupported:
+            return "This sign-in needs an additional Authentik verification step."
         case .badStatusCode(let statusCode, let body):
             return "Auth request failed with status \(statusCode): \(body)"
         }
@@ -114,6 +120,68 @@ final class OIDCAuthService {
         )
     }
 
+    /// Mirrors the website's Authentik flow executor. Credentials travel only
+    /// from this device to Authentik; neither KTP's API nor the app's storage
+    /// receives the password. Once the flow establishes Authentik's session,
+    /// the normal PKCE authorization-code exchange produces our app tokens.
+    func signIn(username: String, password: String) async throws -> AuthTokens {
+        guard !username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !password.isEmpty else {
+            throw AuthServiceError.credentialRejected("Enter your username and password.")
+        }
+
+        let redirectDelegate = AuthorizationRedirectDelegate()
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = true
+        configuration.httpCookieAcceptPolicy = .always
+        let authentikSession = URLSession(configuration: configuration, delegate: redirectDelegate, delegateQueue: nil)
+        let oidc = try await discoverConfiguration(using: authentikSession)
+
+        var challenge = try await fetchFlowChallenge(using: authentikSession)
+        try throwIfFlowRejected(challenge)
+
+        if challenge.component == "ak-stage-identification" {
+            var values = ["uid_field": username]
+            if challenge.passwordFields == true {
+                values["password"] = password
+            }
+            challenge = try await submitFlowChallenge(values, using: authentikSession)
+            try throwIfFlowRejected(challenge)
+        }
+
+        if challenge.component == "ak-stage-password" {
+            challenge = try await submitFlowChallenge(["password": password], using: authentikSession)
+            try throwIfFlowRejected(challenge)
+        }
+
+        // The website asks whether to preserve Authentik's browser session.
+        // The app already owns refresh-token persistence in Keychain, so it
+        // deliberately chooses "no" and leaves no web session behind.
+        if challenge.component == "ak-stage-user-login" {
+            challenge = try await submitFlowChallenge(["remember_me": false], using: authentikSession)
+            try throwIfFlowRejected(challenge)
+        }
+
+        guard challenge.component == "xak-flow-redirect" else {
+            throw AuthServiceError.credentialFlowUnsupported
+        }
+
+        let pkce = PKCE.generate()
+        let state = RandomString.generate(length: 32)
+        let callbackURL = try await authorizeSilently(
+            configuration: oidc,
+            pkce: pkce,
+            state: state,
+            using: authentikSession,
+            redirectDelegate: redirectDelegate
+        )
+        return try await exchangeCode(
+            try authorizationCode(from: callbackURL, expectedState: state),
+            codeVerifier: pkce.verifier,
+            tokenEndpoint: oidc.tokenEndpoint
+        )
+    }
+
     func refresh(refreshToken: String, idToken: String? = nil) async throws -> AuthTokens {
         let configuration = try await discoverConfiguration()
 
@@ -169,16 +237,111 @@ final class OIDCAuthService {
         }
     }
 
-    private func discoverConfiguration() async throws -> OIDCConfiguration {
+    private func discoverConfiguration(using requestSession: URLSession? = nil) async throws -> OIDCConfiguration {
         let discoveryURL = AuthConfiguration.issuer.appendingPathComponent(".well-known/openid-configuration")
         AuthDebugLog.log("Fetching discovery document: \(discoveryURL.absoluteString)")
-        let (data, response) = try await session.data(from: discoveryURL)
+        let (data, response) = try await (requestSession ?? session).data(from: discoveryURL)
         try validateHTTPResponse(response, data: data)
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let configuration = try decoder.decode(OIDCConfiguration.self, from: data)
         AuthDebugLog.log("Discovery loaded. authEndpoint=\(configuration.authorizationEndpoint.absoluteString), tokenEndpoint=\(configuration.tokenEndpoint.absoluteString)")
         return configuration
+    }
+
+    private func fetchFlowChallenge(using requestSession: URLSession) async throws -> AuthentikFlowChallenge {
+        var components = URLComponents()
+        components.scheme = AuthConfiguration.issuer.scheme
+        components.host = AuthConfiguration.issuer.host
+        components.port = AuthConfiguration.issuer.port
+        components.path = "/api/v3/flows/executor/default-authentication-flow/"
+        components.queryItems = [URLQueryItem(name: "query", value: "")]
+        guard let url = components.url else { throw AuthServiceError.missingDiscoveryEndpoint }
+        let (data, response) = try await requestSession.data(from: url)
+        return try decodeFlowChallenge(data, response: response)
+    }
+
+    private func submitFlowChallenge(
+        _ values: [String: Any],
+        using requestSession: URLSession
+    ) async throws -> AuthentikFlowChallenge {
+        var components = URLComponents()
+        components.scheme = AuthConfiguration.issuer.scheme
+        components.host = AuthConfiguration.issuer.host
+        components.port = AuthConfiguration.issuer.port
+        components.path = "/api/v3/flows/executor/default-authentication-flow/"
+        components.queryItems = [URLQueryItem(name: "query", value: "")]
+        guard let url = components.url else { throw AuthServiceError.missingDiscoveryEndpoint }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONSerialization.data(withJSONObject: values)
+        let (data, response) = try await requestSession.data(for: request)
+        return try decodeFlowChallenge(data, response: response)
+    }
+
+    private func decodeFlowChallenge(_ data: Data, response: URLResponse) throws -> AuthentikFlowChallenge {
+        guard let httpResponse = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard httpResponse.statusCode < 500 else {
+            throw AuthServiceError.badStatusCode(httpResponse.statusCode, String(data: data, encoding: .utf8) ?? "No response body")
+        }
+        do {
+            return try JSONDecoder().decode(AuthentikFlowChallenge.self, from: data)
+        } catch {
+            throw AuthServiceError.badStatusCode(httpResponse.statusCode, String(data: data, encoding: .utf8) ?? "Invalid Authentik response")
+        }
+    }
+
+    private func throwIfFlowRejected(_ challenge: AuthentikFlowChallenge) throws {
+        if let message = challenge.errorMessage {
+            throw AuthServiceError.credentialRejected(message)
+        }
+    }
+
+    private func authorizeSilently(
+        configuration: OIDCConfiguration,
+        pkce: PKCE,
+        state: String,
+        using requestSession: URLSession,
+        redirectDelegate: AuthorizationRedirectDelegate
+    ) async throws -> URL {
+        var components = URLComponents(url: configuration.authorizationEndpoint, resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "client_id", value: AuthConfiguration.clientID),
+            URLQueryItem(name: "redirect_uri", value: AuthConfiguration.redirectURI.absoluteString),
+            URLQueryItem(name: "response_type", value: "code"),
+            URLQueryItem(name: "scope", value: AuthConfiguration.scopeString),
+            URLQueryItem(name: "code_challenge", value: pkce.challenge),
+            URLQueryItem(name: "code_challenge_method", value: "S256"),
+            URLQueryItem(name: "state", value: state),
+            URLQueryItem(name: "nonce", value: RandomString.generate(length: 32)),
+            URLQueryItem(name: "prompt", value: "none")
+        ]
+        guard let url = components?.url else { throw AuthServiceError.missingDiscoveryEndpoint }
+
+        redirectDelegate.capturesRedirects = true
+        defer { redirectDelegate.capturesRedirects = false }
+        let (_, response) = try await requestSession.data(from: url)
+        guard let callbackURL = redirectDelegate.redirectURL ?? response.url,
+              callbackURL.scheme == AuthConfiguration.redirectURI.scheme else {
+            throw AuthServiceError.credentialFlowUnsupported
+        }
+        return callbackURL
+    }
+
+    private func authorizationCode(from callbackURL: URL, expectedState: String) throws -> String {
+        guard let callback = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false) else {
+            throw AuthServiceError.invalidCallback
+        }
+        if let error = callback.queryItems?.first(where: { $0.name == "error" })?.value {
+            throw AuthServiceError.authorizationFailed(error, callback.queryItems?.first(where: { $0.name == "error_description" })?.value)
+        }
+        guard callback.queryItems?.first(where: { $0.name == "state" })?.value == expectedState,
+              let code = callback.queryItems?.first(where: { $0.name == "code" })?.value else {
+            throw AuthServiceError.missingAuthorizationCode
+        }
+        return code
     }
 
     private func exchangeCode(
@@ -304,6 +467,45 @@ private struct OIDCConfiguration: Decodable {
     let endSessionEndpoint: URL?
 }
 
+private struct AuthentikFlowChallenge: Decodable {
+    let component: String
+    let passwordFields: Bool?
+    let responseErrors: [String: [AuthentikFlowError]]?
+
+    private enum CodingKeys: String, CodingKey {
+        case component
+        case passwordFields = "password_fields"
+        case responseErrors = "response_errors"
+    }
+
+    var errorMessage: String? {
+        responseErrors?.values
+            .flatMap { $0 }
+            .compactMap(\.displayMessage)
+            .first
+    }
+}
+
+private enum AuthentikFlowError: Decodable {
+    case message(String)
+
+    init(from decoder: Decoder) throws {
+        if let value = try? decoder.singleValueContainer().decode(String.self) {
+            self = .message(value)
+            return
+        }
+        let container = try decoder.container(keyedBy: Keys.self)
+        self = .message(try container.decode(String.self, forKey: .string))
+    }
+
+    private enum Keys: String, CodingKey { case string }
+
+    var displayMessage: String? {
+        if case .message(let value) = self { return value }
+        return nil
+    }
+}
+
 private struct TokenResponse: Decodable {
     let accessToken: String
     let refreshToken: String?
@@ -360,5 +562,25 @@ private final class PresentationContextProvider: NSObject, ASWebAuthenticationPr
         }
 
         return ASPresentationAnchor(windowScene: windowScene)
+    }
+}
+
+private final class AuthorizationRedirectDelegate: NSObject, URLSessionTaskDelegate {
+    var capturesRedirects = false
+    var redirectURL: URL?
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        guard capturesRedirects else {
+            completionHandler(request)
+            return
+        }
+        redirectURL = request.url
+        completionHandler(nil)
     }
 }

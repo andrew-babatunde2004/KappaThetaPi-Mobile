@@ -67,8 +67,19 @@ class PhotoService {
             .appendingPathComponent("media")
     }
 
+    /// A small, server-generated derivative for gallery tiles. The full-size
+    /// original remains reserved for the media viewer and explicit downloads.
+    func thumbnailURL(for photo: PhotoItem) -> URL {
+        mediaURL(for: photo)
+            .appending(queryItems: [URLQueryItem(name: "size", value: "thumbnail")])
+    }
+
     func fetchMediaData(for photo: PhotoItem) async throws -> Data {
         try await fetchProtectedData(from: mediaURL(for: photo), logLabel: "photo media \(photo.id)")
+    }
+
+    func fetchThumbnailData(for photo: PhotoItem) async throws -> Data {
+        try await fetchProtectedData(from: thumbnailURL(for: photo), logLabel: "photo thumbnail \(photo.id)")
     }
 
     func uploadPhoto(

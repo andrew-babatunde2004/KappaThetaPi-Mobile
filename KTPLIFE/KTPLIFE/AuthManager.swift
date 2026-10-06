@@ -106,6 +106,34 @@ final class AuthManager: ObservableObject {
         }
     }
 
+    /// Starts Authentik's credential prompt in the app's secure authentication
+    /// session. The password is entered only on Authentik's origin and never
+    /// reaches the app, the API, or our own server.
+    func signInWithUsernameAndPassword(username: String, password: String) async {
+        AuthDebugLog.log("Username/password sign-in button tapped.")
+        phase = .signingIn
+        errorMessage = nil
+
+        do {
+            let newTokens = try await authService.signIn(username: username, password: password)
+            AuthDebugLog.log("Credential sign-in returned tokens. Saving.")
+            try save(tokens: newTokens)
+            try await updateProfileState()
+        } catch let error as AuthServiceError {
+            AuthDebugLog.log("AuthServiceError: \(error.localizedDescription)")
+            if case .cancelled = error {
+                phase = .signedOut
+                return
+            }
+            phase = .signedOut
+            errorMessage = error.localizedDescription
+        } catch {
+            AuthDebugLog.log("Credential sign-in failed: \(error.localizedDescription)")
+            phase = .signedOut
+            errorMessage = "We couldn’t sign you in. Please try again."
+        }
+    }
+
     func checkProfileStatus() async {
         AuthDebugLog.log("Manual profile status check started.")
         guard isAuthenticated else {
