@@ -128,6 +128,8 @@ struct GroupChat: Identifiable, Hashable, Decodable {
     let lastMessageDate: Date?
     let unreadCount: Int
     let photoAssetID: String?
+    let createdBy: String?
+    let isMemberCreated: Bool
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -139,6 +141,8 @@ struct GroupChat: Identifiable, Hashable, Decodable {
         case createdAt = "created_at"
         case unreadCount = "unread_count"
         case photoAssetID = "photo_asset_id"
+        case createdBy = "created_by"
+        case isMemberCreated = "is_member_created"
     }
 
     nonisolated init(
@@ -147,7 +151,9 @@ struct GroupChat: Identifiable, Hashable, Decodable {
         preview: String,
         lastMessageDate: Date?,
         unreadCount: Int,
-        photoAssetID: String? = nil
+        photoAssetID: String? = nil,
+        createdBy: String? = nil,
+        isMemberCreated: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -155,6 +161,8 @@ struct GroupChat: Identifiable, Hashable, Decodable {
         self.lastMessageDate = lastMessageDate
         self.unreadCount = unreadCount
         self.photoAssetID = photoAssetID
+        self.createdBy = createdBy
+        self.isMemberCreated = isMemberCreated
     }
 
     init(from decoder: Decoder) throws {
@@ -180,6 +188,8 @@ struct GroupChat: Identifiable, Hashable, Decodable {
         }
 
         photoAssetID = try container.decodeFirstPresentStringIfPresent(for: [.photoAssetID])
+        createdBy = try container.decodeFirstPresentStringIfPresent(for: [.createdBy])
+        isMemberCreated = try container.decodeIfPresent(Bool.self, forKey: .isMemberCreated) ?? false
     }
 }
 

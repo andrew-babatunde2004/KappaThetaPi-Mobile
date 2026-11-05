@@ -89,6 +89,7 @@ struct PollsView: View {
                     poll: poll,
                     selectedOptionIDs: selection(for: poll),
                     isVoting: votingPollIDs.contains(poll.id),
+                    apiService: apiService,
                     selectOption: { select($0, on: poll) },
                     submitMultiSelection: { submitVote(for: poll) }
                 )
@@ -170,8 +171,13 @@ private struct PollCard: View {
     let poll: Poll
     let selectedOptionIDs: Set<String>
     let isVoting: Bool
+    let apiService: KTPAPIService
     let selectOption: (String) -> Void
     let submitMultiSelection: () -> Void
+    @State private var votersByOptionID: [String: [PollVoter]] = [:]
+    @State private var isLoadingVoters = false
+    @State private var showVoters = false
+    @State private var voterLoadError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -250,6 +256,45 @@ private struct PollCard: View {
                     .disabled(selectedOptionIDs.isEmpty || isVoting)
                 }
             }
+
+            if poll.votersVisible {
+                Button {
+                    if showVoters {
+                        showVoters = false
+                    } else {
+                        Task { await loadVoters() }
+                    }
+                } label: {
+                    Label(showVoters ? "Hide voters" : "See who voted", systemImage: showVoters ? "person.2.slash" : "person.2")
+                        .font(AppFont.footnote(weight: .semibold))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(AppSurfaceColor.primaryControl)
+
+                if isLoadingVoters { ProgressView().controlSize(.small) }
+                if let voterLoadError {
+                    Text(voterLoadError).font(AppFont.caption()).foregroundStyle(AppSystemColor.secondaryLabel)
+                }
+                if showVoters {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(poll.options) { option in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(option.title).font(AppFont.caption(weight: .semibold)).foregroundStyle(AppSystemColor.secondaryLabel)
+                                let voters = votersByOptionID[option.id] ?? []
+                                if voters.isEmpty {
+                                    Text("No votes yet").font(AppFont.caption()).foregroundStyle(AppSystemColor.secondaryLabel)
+                                } else {
+                                    Text(voters.map(\.displayName).joined(separator: ", "))
+                                        .font(AppFont.footnote()).foregroundStyle(AppSystemColor.primaryLabel)
+                                }
+                            }
+                        }
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(AppSystemColor.insetBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            }
         }
         .padding(18)
         .appElevatedSurface(radius: 24)
@@ -274,6 +319,20 @@ private struct PollCard: View {
             return "\(voteText) · Closes \(expiresAt.formatted(date: .abbreviated, time: .shortened))"
         }
         return poll.allowsMultipleSelections ? "\(voteText) · Select all that apply" : voteText
+    }
+
+    @MainActor
+    private func loadVoters() async {
+        isLoadingVoters = true
+        voterLoadError = nil
+        defer { isLoadingVoters = false }
+        do {
+            let options = try await apiService.fetchPollStats(pollID: poll.id)
+            votersByOptionID = Dictionary(uniqueKeysWithValues: options.map { ($0.id, $0.voters) })
+            showVoters = true
+        } catch {
+            voterLoadError = "Voter details are unavailable right now."
+        }
     }
 }
 

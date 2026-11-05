@@ -153,6 +153,9 @@ struct ContentView: View {
             case .announcements:
                 AnnouncementsView()
                     .environmentObject(authManager)
+            case .careers:
+                OpportunitiesView(showsDismissButton: true)
+                    .environmentObject(authManager)
             case .meetings:
                 MeetingsView()
                     .environmentObject(authManager)
@@ -249,11 +252,11 @@ struct ContentView: View {
                 // inset for its inbox, which allows a pushed conversation to transition
                 // across the entire screen instead of inside the app-shell margins.
                 .contentShellPadding(
-                    top: selectedTab == .photos || selectedTab == .home ? 0 : 16,
+                    top: selectedTab == .photos || selectedTab == .home || selectedTab == .attendance ? 0 : 16,
                     bottom: selectedTab == .photos
                         ? 0
                         : (isKeyboardPresented || isMessageConversationPresented ? 24 : 122),
-                    horizontal: selectedTab.isMessagesTab || selectedTab == .photos || selectedTab == .home ? 0 : 24
+                    horizontal: selectedTab.isMessagesTab || selectedTab == .photos || selectedTab == .home || selectedTab == .attendance ? 0 : 24
                 )
         }
     }
@@ -282,6 +285,7 @@ struct ContentView: View {
                 showCommittees: { presentedFullScreen = .committees },
                 showPolls: { presentedFullScreen = .polls },
                 showAnnouncements: { presentedFullScreen = .announcements },
+                showCareers: { presentedFullScreen = .careers },
                 showMeetings: { presentedFullScreen = .meetings },
                 showInterviews: { presentedFullScreen = .interviews },
                 openQRScanner: { presentedSheet = .qrScanner },
@@ -319,6 +323,8 @@ struct ContentView: View {
             CalendarView(deepLinkedEventID: $pushEventID)
         case .photos:
             PhotosView()
+        case .attendance:
+            AttendanceView(showsDismissButton: false)
         }
     }
 
@@ -548,6 +554,7 @@ private enum AppFullScreenDestination: String, Identifiable {
     case committees
     case polls
     case announcements
+    case careers
     case meetings
     case interviews
     case profile

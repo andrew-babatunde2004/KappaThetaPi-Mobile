@@ -96,6 +96,117 @@ struct DocumentsView: View {
     }
 }
 
+struct AttendanceView: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var authManager: AuthManager
+    @State private var events: [CalendarEvent] = []
+    @State private var isLoading = false
+    @State private var loadError: String?
+    @State private var attendanceSummary: PersonalAttendanceSummary?
+    let showsDismissButton: Bool
+
+    init(showsDismissButton: Bool = true) {
+        self.showsDismissButton = showsDismissButton
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 18) {
+                    AppSectionHeading(
+                        eyebrow: "Chapter Resources",
+                        title: "Attendance tracker",
+                        systemImage: "checkmark.seal.fill"
+                    )
+
+                    MyAttendanceSection(
+                        events: events,
+                        summary: attendanceSummary,
+                        isLoading: isLoading,
+                        error: loadError
+                    )
+                }
+                .padding(20)
+            }
+            .background(AppSystemColor.background)
+            .navigationTitle("Attendance")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if showsDismissButton {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { dismiss() }
+                            .font(AppFont.subheadline(weight: .semibold))
+                    }
+                }
+            }
+            .task {
+                await loadAttendance()
+            }
+            .refreshable {
+                await loadAttendance()
+            }
+        }
+        .tint(AppSystemColor.primaryLabel)
+        .background(AppSystemColor.background.ignoresSafeArea())
+    }
+
+    @MainActor
+    private func loadAttendance() async {
+        isLoading = true
+        loadError = nil
+        defer { isLoading = false }
+
+        let service = CalendarNetworkService(accessTokenProvider: { [authManager] in
+            try await authManager.validAccessToken()
+        })
+        let apiService = KTPAPIService(accessTokenProvider: { [authManager] in
+            try await authManager.validAccessToken()
+        })
+
+        do {
+            let refreshedEvents = try await service.fetchCalendarEvents()
+                .filter { $0.myAttendance != nil }
+                .sorted { $0.startDate > $1.startDate }
+
+            // Attendance records are historical. Keep the last successful
+            // result if a refresh temporarily returns an empty projection.
+            if !refreshedEvents.isEmpty || events.isEmpty {
+                events = refreshedEvents
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            if events.isEmpty {
+                loadError = "Attendance could not be loaded. Pull to refresh and try again."
+            }
+        }
+
+        do {
+            let semesters = try await apiService.fetchAttendanceSemesters()
+            if let currentSemester = semesters.first(where: { $0.contains(day: Self.todayInChapterTimeZone) }) {
+                attendanceSummary = try await apiService
+                    .fetchPersonalAttendance(semesterID: currentSemester.id)
+                    .summary
+            } else {
+                attendanceSummary = nil
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            // The event history remains useful if the semester summary is temporarily unavailable.
+        }
+    }
+
+    private static var todayInChapterTimeZone: String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "America/New_York")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Date())
+    }
+}
+
 private struct DocumentLevelView: View {
     let folder: DocumentFolder?
     let service: ChapterResourcesService
@@ -200,6 +311,76 @@ private struct DocumentLevelView: View {
             loadError = chapterResourceErrorMessage(for: error)
         }
         isLoading = false
+    }
+
+}
+
+private struct MyAttendanceSection: View {
+    let events: [CalendarEvent]
+    let summary: PersonalAttendanceSummary?
+    let isLoading: Bool
+    let error: String?
+
+    private var presentCount: Int { events.filter { $0.myAttendance?.lowercased() == "present" }.count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("Attendance", systemImage: "checkmark.seal.fill")
+                    .font(AppFont.title(20))
+                    .foregroundStyle(AppSystemColor.primaryLabel)
+                Spacer()
+                if isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text("\(presentCount) of \(events.count) attended")
+                        if let summary {
+                            Text("\(summary.absences) of \(summary.allowance) absences used")
+                        }
+                    }
+                    .font(AppFont.caption(weight: .semibold))
+                    .foregroundStyle(AppSurfaceColor.primaryControl)
+                }
+            }
+
+            if events.isEmpty {
+                if let error {
+                    Text(error)
+                        .font(AppFont.footnote())
+                        .foregroundStyle(AppSystemColor.secondaryLabel)
+                } else if isLoading {
+                    Text("Loading your attendance history...")
+                        .font(AppFont.footnote())
+                        .foregroundStyle(AppSystemColor.secondaryLabel)
+                } else {
+                    Text("Your recorded event attendance will appear here.")
+                        .font(AppFont.footnote())
+                        .foregroundStyle(AppSystemColor.secondaryLabel)
+                }
+            } else {
+                ForEach(events) { event in
+                    HStack(spacing: 12) {
+                        Image(systemName: event.myAttendance?.lowercased() == "present" ? "checkmark.circle.fill" : "calendar.badge.clock")
+                            .foregroundStyle(event.myAttendance?.lowercased() == "present" ? AppSurfaceColor.primaryControl : AppSystemColor.secondaryLabel)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(event.title).font(AppFont.subheadline(weight: .semibold)).foregroundStyle(AppSystemColor.primaryLabel)
+                            Text(event.startDate.formatted(date: .abbreviated, time: .omitted))
+                                .font(AppFont.caption()).foregroundStyle(AppSystemColor.secondaryLabel)
+                        }
+                        Spacer()
+                        Text(event.myAttendance?.capitalized ?? "Recorded")
+                            .font(AppFont.caption(weight: .semibold))
+                            .foregroundStyle(AppSystemColor.secondaryLabel)
+                    }
+                    .padding(12)
+                    .background(AppSystemColor.insetBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            }
+        }
+        .padding(16)
+        .appElevatedSurface(radius: 22)
     }
 }
 

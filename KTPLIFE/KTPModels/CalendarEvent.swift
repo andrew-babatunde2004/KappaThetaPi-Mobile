@@ -23,6 +23,7 @@ struct CalendarEvent: Identifiable, Codable {
     let requiresRSVP: Bool
     let canRSVP: Bool
     let myRSVP: CalendarRSVPStatus?
+    let myAttendance: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -38,6 +39,7 @@ struct CalendarEvent: Identifiable, Codable {
         case requiresRSVP = "requiresRsvp"
         case canRSVP = "canRsvp"
         case myRSVP = "myRsvp"
+        case myAttendance
     }
 
     init(
@@ -50,7 +52,8 @@ struct CalendarEvent: Identifiable, Codable {
         url: URL? = nil,
         requiresRSVP: Bool = false,
         canRSVP: Bool = false,
-        myRSVP: CalendarRSVPStatus? = nil
+        myRSVP: CalendarRSVPStatus? = nil,
+        myAttendance: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -62,6 +65,7 @@ struct CalendarEvent: Identifiable, Codable {
         self.requiresRSVP = requiresRSVP
         self.canRSVP = canRSVP
         self.myRSVP = myRSVP
+        self.myAttendance = myAttendance
     }
 
     init(from decoder: Decoder) throws {
@@ -86,6 +90,7 @@ struct CalendarEvent: Identifiable, Codable {
         requiresRSVP = try container.decodeIfPresent(Bool.self, forKey: .requiresRSVP) ?? false
         canRSVP = try container.decodeIfPresent(Bool.self, forKey: .canRSVP) ?? false
         myRSVP = try container.decodeIfPresent(CalendarRSVPStatus.self, forKey: .myRSVP)
+        myAttendance = try container.decodeIfPresent(String.self, forKey: .myAttendance)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -100,6 +105,7 @@ struct CalendarEvent: Identifiable, Codable {
         try container.encode(requiresRSVP, forKey: .requiresRSVP)
         try container.encode(canRSVP, forKey: .canRSVP)
         try container.encodeIfPresent(myRSVP, forKey: .myRSVP)
+        try container.encodeIfPresent(myAttendance, forKey: .myAttendance)
     }
 }
 

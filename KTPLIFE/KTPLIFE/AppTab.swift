@@ -12,6 +12,7 @@ enum AppTab: CaseIterable, Identifiable {
     case community
     case photos
     case calendar
+    case attendance
 
     // Non-tab destinations.
     case messages
@@ -28,6 +29,9 @@ enum AppTab: CaseIterable, Identifiable {
         }
 
         tabs.append(.calendar)
+        if group?.canAccessAttendance != false {
+            tabs.append(.attendance)
+        }
         return tabs
     }
 
@@ -49,6 +53,8 @@ enum AppTab: CaseIterable, Identifiable {
             return "calendar"
         case .photos:
             return "photo"
+        case .attendance:
+            return "checkmark.seal.fill"
         }
     }
 
@@ -68,6 +74,8 @@ enum AppTab: CaseIterable, Identifiable {
             return "Calendar"
         case .photos:
             return "Photos"
+        case .attendance:
+            return "Attendance"
         }
     }
 
@@ -86,6 +94,8 @@ enum AppTab: CaseIterable, Identifiable {
         case .calendar:
             return .calendar
         case .photos:
+            return .defaultWhite
+        case .attendance:
             return .defaultWhite
         }
     }

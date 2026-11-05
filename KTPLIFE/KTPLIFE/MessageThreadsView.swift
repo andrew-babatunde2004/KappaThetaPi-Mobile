@@ -1853,25 +1853,74 @@ private struct ConversationLoadFailure: View {
     }
 }
 
-/// A member-facing view of a group chat. Management stays on the website; this
-/// sheet only surfaces the group identity and current participants.
+/// Group identity, participants, and an invitation action for chat administrators.
 private struct GroupChatDetailsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @EnvironmentObject private var authManager: AuthManager
 
-    let chat: GroupChat
     let apiService: KTPAPIService
 
+    @State private var chat: GroupChat
     @State private var members: [DirectoryMember] = []
     @State private var isLoading = true
     @State private var loadError: String?
+    @State private var isAddingMembers = false
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var isUpdatingPhoto = false
+    @State private var photoError: String?
+
+    init(chat: GroupChat, apiService: KTPAPIService) {
+        _chat = State(initialValue: chat)
+        self.apiService = apiService
+    }
+
+    private var canAddMembers: Bool {
+        // Member-created chats are invite-only by membership: anyone already
+        // in the private chat can invite another member. Official chats remain
+        // managed by eboard.
+        if chat.isMemberCreated { return true }
+        return authManager.currentUserGroup == .eboard
+    }
+
+    private var canEditPhoto: Bool {
+        if chat.isMemberCreated {
+            guard let createdBy = chat.createdBy, let currentUserID = authManager.currentUserID else {
+                return false
+            }
+            return createdBy.caseInsensitiveCompare(currentUserID) == .orderedSame
+        }
+        return authManager.currentUserGroup == .eboard
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
                 LazyVStack(alignment: .leading, spacing: 16) {
                     VStack(spacing: 12) {
-                        GroupChatAvatar(chat: chat, size: 92, apiService: apiService)
+                        ZStack(alignment: .bottomTrailing) {
+                            GroupChatAvatar(chat: chat, size: 92, apiService: apiService)
+
+                            if canEditPhoto {
+                                PhotosPicker(
+                                    selection: $selectedPhoto,
+                                    matching: .images,
+                                    preferredItemEncoding: .current
+                                ) {
+                                    Image(systemName: isUpdatingPhoto ? "hourglass" : "camera.fill")
+                                        .font(.system(size: 13, weight: .bold))
+                                        .foregroundStyle(.white)
+                                        .frame(width: 30, height: 30)
+                                        .background(AppSurfaceColor.primaryControl, in: Circle())
+                                        .overlay {
+                                            Circle().stroke(MessageDesign.background(for: colorScheme), lineWidth: 2)
+                                        }
+                                }
+                                .buttonStyle(.plain)
+                                .disabled(isUpdatingPhoto)
+                                .accessibilityLabel(isUpdatingPhoto ? "Updating group photo" : "Change group photo")
+                            }
+                        }
 
                         Text(chat.name)
                             .font(AppFont.title(24))
@@ -1888,6 +1937,15 @@ private struct GroupChatDetailsView: View {
                     Text("Members")
                         .font(AppFont.headline())
                         .foregroundStyle(MessageDesign.primary(for: colorScheme))
+
+                    if canAddMembers {
+                        Button {
+                            isAddingMembers = true
+                        } label: {
+                            Label("Add Members", systemImage: "person.badge.plus")
+                        }
+                        .buttonStyle(.bordered)
+                    }
 
                     if isLoading {
                         MessagesStatusCard(message: "Loading members...")
@@ -1939,6 +1997,57 @@ private struct GroupChatDetailsView: View {
             .task(id: chat.id) {
                 await loadMembers()
             }
+            .onChange(of: selectedPhoto) { _, item in
+                guard let item else { return }
+                Task { await updatePhoto(from: item) }
+            }
+            .sheet(isPresented: $isAddingMembers) {
+                AddGroupChatMembersView(chat: chat, existingMembers: members, apiService: apiService) {
+                    Task { await loadMembers() }
+                }
+            }
+            .alert("Couldn’t Update Group Photo", isPresented: Binding(
+                get: { photoError != nil },
+                set: { if !$0 { photoError = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(photoError ?? "Please try again.")
+            }
+        }
+    }
+
+    @MainActor
+    private func updatePhoto(from item: PhotosPickerItem) async {
+        guard !isUpdatingPhoto else { return }
+        isUpdatingPhoto = true
+        photoError = nil
+        defer {
+            isUpdatingPhoto = false
+            selectedPhoto = nil
+        }
+
+        do {
+            guard let data = try await item.loadTransferable(type: Data.self) else {
+                throw MessageAttachmentError.unreadableImage
+            }
+            let imageType = item.supportedContentTypes.first(where: {
+                $0.conforms(to: .image) && $0.preferredMIMEType != nil
+            }) ?? .jpeg
+            let uploadImage = try ImageUploadEncoder.encodeForUpload(data: data, contentType: imageType)
+            chat = try await apiService.updateGroupChatPhoto(
+                chatID: chat.id,
+                file: MessageAttachmentUpload(
+                    data: uploadImage.data,
+                    fileName: "group-photo.\(uploadImage.fileExtension)",
+                    mimeType: uploadImage.mimeType
+                )
+            )
+            NotificationCenter.default.post(name: .messageThreadShouldRefresh, object: nil)
+        } catch is CancellationError {
+            return
+        } catch {
+            photoError = messagesErrorMessage(for: error)
         }
     }
 
@@ -1958,6 +2067,116 @@ private struct GroupChatDetailsView: View {
         }
 
         isLoading = false
+    }
+}
+
+private struct AddGroupChatMembersView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let chat: GroupChat
+    let existingMembers: [DirectoryMember]
+    let apiService: KTPAPIService
+    let onAdded: () -> Void
+
+    @State private var directory: [DirectoryMember] = []
+    @State private var search = ""
+    @State private var selectedIDs: Set<String> = []
+    @State private var isLoading = true
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+
+    private var availableMembers: [DirectoryMember] {
+        let existingIDs = Set(existingMembers.map { $0.authentikID ?? $0.id })
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return directory.filter { member in
+            let userID = member.authentikID ?? member.id
+            return member.group != .rush && !existingIDs.contains(userID) &&
+                (query.isEmpty || member.name.localizedCaseInsensitiveContains(query) ||
+                 (member.username?.localizedCaseInsensitiveContains(query) ?? false))
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Search members", text: $search)
+                        .textInputAutocapitalization(.never)
+                    if isLoading {
+                        ProgressView("Loading members")
+                    } else if availableMembers.isEmpty {
+                        Text("No members available to add")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(availableMembers) { member in
+                            let userID = member.authentikID ?? member.id
+                            Button {
+                                if selectedIDs.contains(userID) {
+                                    selectedIDs.remove(userID)
+                                } else {
+                                    selectedIDs.insert(userID)
+                                }
+                            } label: {
+                                HStack {
+                                    Text(member.name).foregroundStyle(.primary)
+                                    Spacer()
+                                    if selectedIDs.contains(userID) {
+                                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                } header: {
+                    Text("People (\(selectedIDs.count) selected)")
+                }
+
+                if let errorMessage {
+                    Section { Text(errorMessage).foregroundStyle(.red) }
+                }
+            }
+            .navigationTitle("Add Members")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isSaving ? "Adding…" : "Add") {
+                        Task { await addMembers() }
+                    }
+                    .disabled(selectedIDs.isEmpty || isSaving)
+                }
+            }
+            .task { await loadDirectory() }
+        }
+    }
+
+    private func loadDirectory() async {
+        do {
+            directory = try await apiService.fetchDirectoryMembers()
+        } catch {
+            errorMessage = messagesErrorMessage(for: error)
+        }
+        isLoading = false
+    }
+
+    private func addMembers() async {
+        isSaving = true
+        errorMessage = nil
+        do {
+            for userID in selectedIDs.sorted() {
+                try await apiService.addGroupChatMember(chatID: chat.id, userID: userID)
+            }
+            onAdded()
+            dismiss()
+        } catch {
+            errorMessage = "Some members may have been added. \(messagesErrorMessage(for: error))"
+            onAdded()
+            isSaving = false
+        }
     }
 }
 

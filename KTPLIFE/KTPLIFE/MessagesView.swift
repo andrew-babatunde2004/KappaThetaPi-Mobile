@@ -11,6 +11,7 @@ struct MessagesView: View {
     @State private var selectedSection: CommunitySection = .messages
     @State private var messagePath: [MessageThread] = []
     @State private var inboxRefreshVersion = 0
+    @State private var isCreatingGroupChat = false
     @State private var deepLinkTask: Task<Void, Never>?
     @Binding private var isConversationPresented: Bool
     @Binding private var deepLinkedUserID: String?
@@ -71,6 +72,16 @@ struct MessagesView: View {
         .onAppear { openPushConversationIfNeeded() }
         .onChange(of: deepLinkedUserID) { _, _ in openPushConversationIfNeeded() }
         .onChange(of: deepLinkedGroupChat) { _, _ in openPushConversationIfNeeded() }
+        .sheet(isPresented: $isCreatingGroupChat) {
+            NewGroupChatView(
+                apiService: apiService,
+                currentUserID: authManager.currentUserID
+            ) { chat in
+                isCreatingGroupChat = false
+                inboxRefreshVersion += 1
+                messagePath = [.group(chat)]
+            }
+        }
         .background(MessageDesign.background(for: colorScheme).ignoresSafeArea())
     }
 
@@ -84,6 +95,18 @@ struct MessagesView: View {
                     .foregroundStyle(MessageDesign.primary(for: colorScheme))
 
                 Spacer()
+
+                if let group = authManager.currentUserGroup, group != .rush {
+                    Button {
+                        isCreatingGroupChat = true
+                    } label: {
+                        Image(systemName: "plus.message")
+                            .font(AppFont.subheadline(weight: .semibold))
+                            .frame(minWidth: 40, minHeight: 40)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("New group chat")
+                }
 
                 Button {
                     selectedSection = .directory
@@ -220,6 +243,129 @@ struct MessagesView: View {
             lastMessageDate: nil,
             unreadCount: 0
         )
+    }
+}
+
+private struct NewGroupChatView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let apiService: KTPAPIService
+    let currentUserID: String?
+    let onCreated: (GroupChat) -> Void
+
+    @State private var name = ""
+    @State private var search = ""
+    @State private var members: [DirectoryMember] = []
+    @State private var selectedIDs: Set<String> = []
+    @State private var isLoading = true
+    @State private var isSaving = false
+    @State private var errorMessage: String?
+
+    private var eligibleMembers: [DirectoryMember] {
+        members.filter { member in
+            member.group != .rush && (member.authentikID ?? member.id) != currentUserID
+        }
+    }
+
+    private var filteredMembers: [DirectoryMember] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return eligibleMembers }
+        return eligibleMembers.filter {
+            $0.name.localizedCaseInsensitiveContains(query) ||
+            ($0.username?.localizedCaseInsensitiveContains(query) ?? false)
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Chat name") {
+                    TextField("e.g. Study group", text: $name)
+                        .textInputAutocapitalization(.words)
+                }
+
+                Section {
+                    TextField("Search members", text: $search)
+                        .textInputAutocapitalization(.never)
+
+                    if isLoading {
+                        ProgressView("Loading members")
+                    } else {
+                        ForEach(filteredMembers) { member in
+                            let userID = member.authentikID ?? member.id
+                            Button {
+                                if selectedIDs.contains(userID) {
+                                    selectedIDs.remove(userID)
+                                } else {
+                                    selectedIDs.insert(userID)
+                                }
+                            } label: {
+                                HStack {
+                                    Text(member.name)
+                                        .foregroundStyle(.primary)
+                                    Spacer()
+                                    if selectedIDs.contains(userID) {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundStyle(.tint)
+                                    }
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                } header: {
+                    Text("Add people (\(selectedIDs.count) selected)")
+                } footer: {
+                    Text("This chat is private to its members. Eboard can read messages if someone reports one.")
+                }
+
+                if let errorMessage {
+                    Section {
+                        Text(errorMessage)
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("New Group Chat")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(isSaving ? "Creating…" : "Create") {
+                        Task { await createChat() }
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedIDs.isEmpty || isSaving)
+                }
+            }
+            .task { await loadMembers() }
+        }
+    }
+
+    private func loadMembers() async {
+        do {
+            members = try await apiService.fetchDirectoryMembers()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        isLoading = false
+    }
+
+    private func createChat() async {
+        isSaving = true
+        errorMessage = nil
+        do {
+            let chat = try await apiService.createGroupChat(
+                name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                memberIDs: Array(selectedIDs)
+            )
+            onCreated(chat)
+        } catch {
+            errorMessage = error.localizedDescription
+            isSaving = false
+        }
     }
 }
 

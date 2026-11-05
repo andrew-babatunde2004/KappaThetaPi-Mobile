@@ -255,38 +255,14 @@ struct PhotosView: View {
         
         do {
             let loadedPhotos = try await photoService.fetchPhotos(albumId: album.apiAlbumID)
-            var loadedThumbnails: [String: UIImage] = [:]
-            let batchSize = 6
-            for batchStart in stride(from: 0, to: loadedPhotos.count, by: batchSize) {
-                let batchEnd = min(batchStart + batchSize, loadedPhotos.count)
-                let tasks = loadedPhotos[batchStart..<batchEnd].map { photo in
-                    Task { @MainActor in
-                        (photo.id, await prepareThumbnail(for: photo))
-                    }
-                }
-
-                for (batchIndex, task) in tasks.enumerated() {
-                    guard !Task.isCancelled else {
-                        tasks.forEach { $0.cancel() }
-                        return
-                    }
-
-                    let (photoID, thumbnail) = await task.value
-                    if let thumbnail {
-                        loadedThumbnails[photoID] = thumbnail
-                    }
-                    let completedCount = batchStart + batchIndex + 1
-                    galleryLoadProgress = Double(completedCount) / Double(max(loadedPhotos.count, 1))
-                }
-            }
-
-            preparedThumbnails = loadedThumbnails
+            guard !Task.isCancelled else { return }
+            // Render the complete gallery from metadata immediately. Visible
+            // tiles fetch small derivatives independently as they appear.
+            preparedThumbnails = [:]
             photos = loadedPhotos
+            galleryLoadProgress = 1
             if album.apiAlbumID == nil {
-                galleryContentCache.store(photos: loadedPhotos, thumbnails: loadedThumbnails)
-            }
-            if loadedPhotos.isEmpty {
-                galleryLoadProgress = 1
+                galleryContentCache.store(photos: loadedPhotos, thumbnails: [:])
             }
             loadError = nil
         } catch {
@@ -322,20 +298,18 @@ struct PhotosView: View {
     private func prepareThumbnail(for photo: PhotoItem) async -> UIImage? {
         if photo.isVideo {
             do {
-                let data = try await photoService.fetchMediaData(for: photo)
-                let url = try await MediaTemporaryFile.write(data: data, suggestedPath: photo.imagePath)
-                defer { try? FileManager.default.removeItem(at: url) }
-                return await VideoThumbnailGenerator.image(from: url)
+                guard let image = UIImage(data: try await photoService.fetchThumbnailData(for: photo)) else { return nil }
+                return image
             } catch {
                 return nil
             }
         }
 
         return await thumbnailRepository.image(
-            for: "gallery-\(photo.id)",
+            for: "gallery-thumbnail-\(photo.id)",
             pointSize: 180,
             displayScale: displayScale,
-            loadData: { try await photoService.fetchMediaData(for: photo) }
+            loadData: { try await photoService.fetchThumbnailData(for: photo) }
         )
     }
     
@@ -691,10 +665,7 @@ private struct AuthenticatedPhotoTile: View {
 
         if photo.isVideo {
             do {
-                let data = try await photoService.fetchMediaData(for: photo)
-                let url = try await MediaTemporaryFile.write(data: data, suggestedPath: photo.imagePath)
-                defer { try? FileManager.default.removeItem(at: url) }
-                image = await VideoThumbnailGenerator.image(from: url)
+                image = UIImage(data: try await photoService.fetchThumbnailData(for: photo))
             } catch is CancellationError {
                 return
             } catch {
@@ -704,10 +675,10 @@ private struct AuthenticatedPhotoTile: View {
         }
 
         let thumbnail = await thumbnailRepository.image(
-            for: "gallery-\(photo.id)",
+            for: "gallery-thumbnail-\(photo.id)",
             pointSize: size.width,
             displayScale: displayScale,
-            loadData: { try await photoService.fetchMediaData(for: photo) }
+            loadData: { try await photoService.fetchThumbnailData(for: photo) }
         )
         guard !Task.isCancelled else { return }
         image = thumbnail

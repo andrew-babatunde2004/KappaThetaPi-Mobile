@@ -71,6 +71,13 @@ class PhotoService {
         try await fetchProtectedData(from: mediaURL(for: photo), logLabel: "photo media \(photo.id)")
     }
 
+    func fetchThumbnailData(for photo: PhotoItem) async throws -> Data {
+        var components = URLComponents(url: mediaURL(for: photo), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "size", value: "thumbnail")]
+        guard let url = components?.url else { throw URLError(.badURL) }
+        return try await fetchProtectedData(from: url, logLabel: "photo thumbnail \(photo.id)")
+    }
+
     func uploadPhoto(
         data: Data,
         fileName: String,

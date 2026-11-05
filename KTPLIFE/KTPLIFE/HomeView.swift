@@ -19,6 +19,7 @@ struct HomeView: View {
     let showCommittees: () -> Void
     let showPolls: () -> Void
     let showAnnouncements: () -> Void
+    let showCareers: () -> Void
     let showMeetings: () -> Void
     let showInterviews: () -> Void
     let openQRScanner: () -> Void
@@ -203,13 +204,19 @@ struct HomeView: View {
                     action: showAnnouncements
                 )
 
+                HomeNavigationItem(
+                    title: "Career Resources",
+                    systemImage: "briefcase.fill",
+                    action: showCareers
+                )
+                .gridCellColumns(canAccessMeetings ? 1 : 2)
+
                 if canAccessMeetings {
                     HomeNavigationItem(
                         title: "Meetings",
                         systemImage: "person.2.badge.gearshape",
                         action: showMeetings
                     )
-                    .gridCellColumns(2)
                 }
 
                 if canAccessInterviews {
@@ -251,12 +258,13 @@ struct HomeView: View {
     }
 
     private func eventsInCurrentWeek(from events: [CalendarEvent]) -> [CalendarEvent] {
-        guard let week = Calendar.current.dateInterval(of: .weekOfYear, for: Date()) else {
+        let now = Date.now
+        guard let week = Calendar.current.dateInterval(of: .weekOfYear, for: now) else {
             return []
         }
 
         return events
-            .filter { $0.endDate >= week.start && $0.startDate < week.end }
+            .filter { $0.endDate > now && $0.startDate < week.end }
             .sorted { $0.startDate < $1.startDate }
     }
 
@@ -832,6 +840,7 @@ private enum HomeHeroConfiguration {
         showCommittees: {},
         showPolls: {},
         showAnnouncements: {},
+        showCareers: {},
         showMeetings: {},
         showInterviews: {},
         openQRScanner: {},
@@ -851,6 +860,7 @@ private enum HomeHeroConfiguration {
         showCommittees: {},
         showPolls: {},
         showAnnouncements: {},
+        showCareers: {},
         showMeetings: {},
         showInterviews: {},
         openQRScanner: {},

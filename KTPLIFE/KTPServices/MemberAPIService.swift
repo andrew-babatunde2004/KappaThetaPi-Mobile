@@ -464,7 +464,7 @@ final class KTPAPIService {
     }
 
     func createGroupChat(name: String, memberIDs: [String]) async throws -> GroupChat {
-        let url = baseURL.appendingPathComponent("group-chats")
+        let url = baseURL.appendingPathComponent("group-chats").appendingPathComponent("member")
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -480,13 +480,14 @@ final class KTPAPIService {
         _ = try await fetchProtectedData(for: request, logLabel: "delete group chat \(id)")
     }
 
-    func updateGroupChatPhoto(chatID: String, file: MessageAttachmentUpload) async throws {
+    func updateGroupChatPhoto(chatID: String, file: MessageAttachmentUpload) async throws -> GroupChat {
         let url = baseURL
             .appendingPathComponent("group-chats")
             .appendingPathComponent(chatID)
             .appendingPathComponent("photo")
         let request = Self.multipartRequest(url: url, method: "PUT", fields: [:], file: file)
-        _ = try await fetchProtectedData(for: request, logLabel: "update group chat \(chatID) photo")
+        let data = try await fetchProtectedData(for: request, logLabel: "update group chat \(chatID) photo")
+        return try JSONDecoder().decode(GroupChat.self, from: data)
     }
 
     func fetchGroupChatMembers(chatID: String) async throws -> [DirectoryMember] {
@@ -552,6 +553,20 @@ final class KTPAPIService {
             AuthDebugLog.log("Polls decode failed: \(error.localizedDescription). Body=\(responseBody)")
             throw KTPAPIError.decodeFailed(error.localizedDescription)
         }
+    }
+
+    /// Fetches per-option voters. The API enforces the poll's show-voters
+    /// setting and result-visibility rules for the authenticated member.
+    func fetchPollStats(pollID: String) async throws -> [PollOption] {
+        let url = baseURL.appendingPathComponent("polls").appendingPathComponent(pollID).appendingPathComponent("stats")
+        let data = try await fetchProtectedData(from: url, logLabel: "poll stats \(pollID)")
+        let decoder = JSONDecoder()
+        if let options = try? decoder.decode([PollOption].self, from: data) { return options }
+        if let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let value = object["options"], JSONSerialization.isValidJSONObject(value) {
+            return try decoder.decode([PollOption].self, from: JSONSerialization.data(withJSONObject: value))
+        }
+        throw KTPAPIError.decodeFailed("The response did not contain poll voter statistics.")
     }
 
     /// Fetches the announcement board that matches the authenticated account.
@@ -765,9 +780,73 @@ final class KTPAPIService {
         return try await fetchProtectedData(from: url, logLabel: "profile picture for \(userId)")
     }
 
+    func fetchCareerCompanies(search: String = "") async throws -> [CareerCompany] {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("careers/companies"),
+            resolvingAgainstBaseURL: false
+        )
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !query.isEmpty {
+            components?.queryItems = [URLQueryItem(name: "search", value: query)]
+        }
+        guard let url = components?.url else { throw URLError(.badURL) }
+        let data = try await fetchProtectedData(from: url, logLabel: "career companies")
+        return try JSONDecoder().decode([CareerCompany].self, from: data)
+    }
+
+    func fetchCareerCompany(id: Int) async throws -> CareerCompanyDetail {
+        let url = baseURL
+            .appendingPathComponent("careers/companies")
+            .appendingPathComponent(String(id))
+        let data = try await fetchProtectedData(from: url, logLabel: "career company \(id)")
+        return try JSONDecoder().decode(CareerCompanyDetail.self, from: data)
+    }
+
+    func fetchMerchAccess() async throws -> Bool {
+        let data = try await fetchProtectedData(
+            from: baseURL.appendingPathComponent("merch/access"),
+            logLabel: "merch access"
+        )
+        return try JSONDecoder().decode(MerchAccess.self, from: data).canView
+    }
+
+    func fetchMerchShirtSizes() async throws -> MerchShirtSizesResponse {
+        let data = try await fetchProtectedData(
+            from: baseURL.appendingPathComponent("merch/shirt-sizes"),
+            logLabel: "merch shirt sizes"
+        )
+        return try JSONDecoder().decode(MerchShirtSizesResponse.self, from: data)
+    }
+
+    func fetchAttendanceSemesters() async throws -> [AttendanceSemester] {
+        let data = try await fetchProtectedData(
+            from: baseURL.appendingPathComponent("attendance-log/semesters"),
+            logLabel: "attendance semesters"
+        )
+        return try JSONDecoder().decode([AttendanceSemester].self, from: data)
+    }
+
+    func fetchPersonalAttendance(semesterID: Int) async throws -> PersonalAttendanceResponse {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("attendance-log/mine"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "semester_id", value: String(semesterID))]
+        guard let url = components?.url else { throw URLError(.badURL) }
+        let data = try await fetchProtectedData(from: url, logLabel: "personal attendance summary")
+        return try JSONDecoder().decode(PersonalAttendanceResponse.self, from: data)
+    }
+
     /// Fetches visible homepage highlights from authenticated `GET /ios-homepage-photos`.
-    func fetchHomepageSlides() async throws -> [HomepageSlide] {
-        let url = baseURL.appendingPathComponent("ios-homepage-photos")
+    func fetchHomepageSlides(includeHidden: Bool = false) async throws -> [HomepageSlide] {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("ios-homepage-photos"),
+            resolvingAgainstBaseURL: false
+        )
+        if includeHidden {
+            components?.queryItems = [URLQueryItem(name: "include_hidden", value: "true")]
+        }
+        guard let url = components?.url else { throw URLError(.badURL) }
         let data = try await fetchProtectedData(from: url, logLabel: "homepage slides")
 
         do {
@@ -786,6 +865,44 @@ final class KTPAPIService {
             .appendingPathComponent(slide.id)
             .appendingPathComponent("media")
         return try await fetchProtectedData(from: url, logLabel: "homepage slide media for \(slide.id)")
+    }
+
+    func createHomepageSlide(file: MessageAttachmentUpload) async throws -> HomepageSlide {
+        let audienceData = try JSONSerialization.data(
+            withJSONObject: ["active", "pledge", "alumni", "rush"]
+        )
+        let audience = String(data: audienceData, encoding: .utf8) ?? "[\"active\"]"
+        let url = baseURL.appendingPathComponent("ios-homepage-photos")
+        let request = Self.multipartRequest(
+            url: url,
+            method: "POST",
+            fields: [
+                "title": "Chapter highlight",
+                "alt_text": "Chapter highlight",
+                "audience": audience,
+                "is_active": "true",
+            ],
+            file: file
+        )
+        let data = try await fetchProtectedData(for: request, logLabel: "create homepage slide")
+        return try JSONDecoder().decode(HomepageSlide.self, from: data)
+    }
+
+    func updateHomepageSlide(id: String, update: HomepageSlideUpdateRequest) async throws -> HomepageSlide {
+        let url = baseURL.appendingPathComponent("ios-homepage-photos").appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "PUT"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONEncoder().encode(update)
+        let data = try await fetchProtectedData(for: request, logLabel: "update homepage slide \(id)")
+        return try JSONDecoder().decode(HomepageSlide.self, from: data)
+    }
+
+    func deleteHomepageSlide(id: String) async throws {
+        let url = baseURL.appendingPathComponent("ios-homepage-photos").appendingPathComponent(id)
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        _ = try await fetchProtectedData(for: request, logLabel: "delete homepage slide \(id)")
     }
 
     /// Registers the current iOS device with protected `POST /notifications/devices`.

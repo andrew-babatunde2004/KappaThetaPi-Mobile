@@ -10,6 +10,8 @@ struct Poll: Identifiable, Equatable, Decodable {
     let expiresAt: Date?
     let myOptionIDs: Set<String>
     let totalVotes: Int
+    let showVoters: Bool
+    let votersVisible: Bool
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -24,6 +26,8 @@ struct Poll: Identifiable, Equatable, Decodable {
         case expiresAt = "expires_at"
         case myOptionIDs = "my_option_ids"
         case totalVotes = "total_votes"
+        case showVoters = "show_voters"
+        case votersVisible = "voters_visible"
     }
 
     var isCurrentlyClosed: Bool {
@@ -47,6 +51,8 @@ struct Poll: Identifiable, Equatable, Decodable {
         expiresAt = container.pollDate(for: .expiresAt)
         myOptionIDs = Set(container.pollStringArray(for: .myOptionIDs))
         totalVotes = container.pollInt(for: .totalVotes) ?? 0
+        showVoters = container.pollBool(for: .showVoters) ?? false
+        votersVisible = container.pollBool(for: .votersVisible) ?? false
     }
 
     static func decodePolls(from data: Data) throws -> [Poll] {
@@ -76,6 +82,7 @@ struct PollOption: Identifiable, Equatable, Decodable {
     let id: String
     let title: String
     let voteCount: Int
+    let voters: [PollVoter]
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -88,6 +95,7 @@ struct PollOption: Identifiable, Equatable, Decodable {
         case voteCount = "vote_count"
         case votes
         case count
+        case voters
     }
 
     init(from decoder: Decoder) throws {
@@ -105,6 +113,30 @@ struct PollOption: Identifiable, Equatable, Decodable {
             ?? container.pollInt(for: .votes)
             ?? container.pollInt(for: .count)
             ?? 0
+        voters = (try? container.decodeIfPresent([PollVoter].self, forKey: .voters)) ?? []
+    }
+}
+
+struct PollVoter: Identifiable, Equatable, Decodable {
+    let id: String
+    let username: String?
+    let firstName: String?
+    let lastName: String?
+    let preferredName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id = "authentik_id"
+        case username
+        case firstName = "first_name"
+        case lastName = "last_name"
+        case preferredName = "preferred_name"
+    }
+
+    var displayName: String {
+        if let preferredName = preferredName?.nonEmptyTrimmed { return preferredName }
+        let fullName = [firstName, lastName].compactMap { $0?.nonEmptyTrimmed }.joined(separator: " ")
+        if !fullName.isEmpty { return fullName }
+        return username?.nonEmptyTrimmed ?? "Member"
     }
 }
 

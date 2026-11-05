@@ -34,6 +34,7 @@ struct ProfileView: View {
     @State private var isDeletingAccount = false
     @State private var showsDeleteAccountConfirmation = false
     @State private var errorMessage: String?
+    @State private var canViewMerch = false
 
     private var isPreview: Bool {
         ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
@@ -87,6 +88,9 @@ struct ProfileView: View {
         .preferredColorScheme(selectedAppearance.preferredColorScheme)
         .task {
             await loadProfile()
+        }
+        .task {
+            await loadMerchAccess()
         }
         .alert("Delete Account?", isPresented: $showsDeleteAccountConfirmation) {
             Button("Cancel", role: .cancel) {}
@@ -256,6 +260,40 @@ struct ProfileView: View {
             }
             .listRowBackground(AppSystemColor.elevatedBackground)
 
+            Section("Chapter tools") {
+                Link(destination: URL(string: "https://docs.ugaktp.com")!) {
+                    SettingsRowLabel(
+                        title: "KTP Docs",
+                        subtitle: "Open the chapter documentation site",
+                        systemImage: "doc.text.fill"
+                    )
+                }
+
+                Link(destination: URL(string: "https://mail.ugaktp.com/?iam_sso=1")!) {
+                    SettingsRowLabel(
+                        title: "Chapter Mail",
+                        subtitle: "Open your KTP email inbox",
+                        systemImage: "envelope.open.fill"
+                    )
+                }
+            }
+            .listRowBackground(AppSystemColor.elevatedBackground)
+
+            if canViewMerch {
+                Section("Committee tools") {
+                    NavigationLink {
+                        MerchManagementView()
+                    } label: {
+                        SettingsRowLabel(
+                            title: "Merch Management",
+                            subtitle: "Review member shirt-size totals",
+                            systemImage: "tshirt.fill"
+                        )
+                    }
+                }
+                .listRowBackground(AppSystemColor.elevatedBackground)
+            }
+
             if profile?.memberGroup?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "eboard" {
                 Section("Chapter leadership") {
                     NavigationLink {
@@ -265,6 +303,16 @@ struct ProfileView: View {
                             title: "Review Reports",
                             subtitle: "Manage member-submitted reports",
                             systemImage: "checklist"
+                        )
+                    }
+
+                    NavigationLink {
+                        HomepageMediaManagementView()
+                    } label: {
+                        SettingsRowLabel(
+                            title: "Homepage Media",
+                            subtitle: "Manage slides shown on the homepage",
+                            systemImage: "photo.stack.fill"
                         )
                     }
                 }
@@ -362,6 +410,17 @@ struct ProfileView: View {
         }
 
         isLoading = false
+    }
+
+    @MainActor
+    private func loadMerchAccess() async {
+        do {
+            canViewMerch = try await apiService.fetchMerchAccess()
+        } catch is CancellationError {
+            return
+        } catch {
+            canViewMerch = false
+        }
     }
 
     @MainActor
